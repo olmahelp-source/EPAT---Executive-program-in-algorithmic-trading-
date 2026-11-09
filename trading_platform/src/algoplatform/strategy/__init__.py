@@ -3,3 +3,4 @@ from .builder import (RuleBasedStrategy, StrategyBuilder, create_from_spec, spec
                       spec_to_json, validate_spec)
 from .library import (DonchianBreakout, MomentumRotation, PairsTrading, RSIReversion, SMACrossover,
                       ZScoreReversion)
+from .ml import MLStrategy
