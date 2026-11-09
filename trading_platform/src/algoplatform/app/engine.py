@@ -187,7 +187,7 @@ class TradingEngine:
             for sym in self._run_strategy(slot, ts, bars):
                 touched.setdefault(sym, []).append(slot.strategy.id)
         for sym, ids in touched.items():
-            self._rebalance(sym, ids[0] if len(set(ids)) == 1 else "netted")
+            self._rebalance(sym, "+".join(sorted(set(ids))))     # netted orders are attributed to every strategy behind them
 
     # ---- strategy -> orders -------------------------------------------------------------------------
     def _run_strategy(self, slot: _Slot, ts: datetime, bars: Dict[str, Bar]) -> List[str]:

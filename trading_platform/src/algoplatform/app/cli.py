@@ -13,6 +13,7 @@ from ..core.exceptions import PlatformError
 from ..core.logging import setup_logging
 from ..data import MarketData, synthetic
 from ..optimize import ParameterSpace, backtest_objective, optimize
+from .. import fundamentals as _fundamentals, sentiment as _sentiment  # noqa: F401  (registers their strategies)
 from ..strategy.base import STRATEGIES
 
 

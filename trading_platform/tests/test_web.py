@@ -6,7 +6,7 @@ import urllib.request
 
 import helpers  # noqa: F401
 from algoplatform.core import PlatformConfig
-from algoplatform.web.server import App, make_handler
+from algoplatform.web.server import App, create_server, make_handler
 from http.server import ThreadingHTTPServer
 
 PW = "Correct-Horse-9"
@@ -16,7 +16,7 @@ class WebApiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.app = App(PlatformConfig(log_level="CRITICAL"), fast_hash=True)
-        cls.httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(cls.app))
+        cls.httpd = create_server(cls.app, "127.0.0.1", 0)
         cls.base = f"http://127.0.0.1:{cls.httpd.server_address[1]}"
         threading.Thread(target=cls.httpd.serve_forever, daemon=True).start()
         cls.admin = cls.login("root_admin")                      # first account => admin

@@ -9,6 +9,7 @@ Security posture (read before exposing beyond localhost):
 """
 from __future__ import annotations
 
+import io
 import json
 import math
 import mimetypes
@@ -22,6 +23,9 @@ import numpy as np
 import pandas as pd
 
 from ..analytics.metrics import drawdown_series
+from ..analytics.tca import parent_tca, tca_summary
+from ..analytics.trades import contribution_by
+from ..backtest import BacktestEngine
 from ..app.platform import TradingPlatform
 from ..core.config import PlatformConfig
 from ..core.enums import OrderStatus, OrderType, Permission, Role, Side
@@ -31,14 +35,24 @@ from ..core.exceptions import (AuthenticationError, AuthorizationError, Backtest
 from ..core.logging import get_logger
 from ..core.models import Bar
 from ..data import MarketData, synthetic
+from ..data.cleaning import validate_ohlcv
+from ..portfolio.allocation import FundAllocator
+from ..risk.measures import (HISTORICAL_SCENARIOS, expected_shortfall, historical_var, parametric_var,
+                             reverse_stress_loss, stress_test)
 from ..persistence import SqliteStore
-from ..optimize import ParameterSpace
+from ..optimize import ParameterSpace, walk_forward
+from .. import fundamentals as _fundamentals, sentiment as _sentiment  # noqa: F401  (registers factor_ls / sentiment)
 from ..strategy.base import STRATEGIES
+from ..utils.timeutils import SimClock
 from ..users.manager import User, UserManager
 
 log = get_logger(__name__)
 STATIC = os.path.join(os.path.dirname(__file__), "static")
 MAX_BODY = 1_000_000
+NEEDS_DATA = {"factor_ls", "sentiment"}          # need a fundamentals store / news feed: not runnable from the UI
+SLOW = {"ml_logistic"}                            # retrains repeatedly: keep optimisation small
+ALGO_NAMES = {"twap", "vwap", "pov", "iceberg", "is"}
+MAX_UPLOAD_ROWS, MAX_UPLOAD_SYMBOLS = 5000, 10
 _STATUS = ((AuthenticationError, 401), (AuthorizationError, 403), (UserError, 409), (RiskError, 409), (OrderError, 409),
            (ValidationError, 400), (ConfigError, 400), (StrategyError, 400), (BacktestError, 400),
            (OptimizationError, 400), (DataError, 400))
@@ -82,6 +96,14 @@ class LiveSession:
         self.next_ts = pd.Timestamp("2024-01-01")
         self.lock = threading.RLock()
         self.history: Dict[str, List[float]] = {s: [] for s in symbols}
+        self.cond = threading.Condition()
+        self.version = 0
+
+    def touch(self) -> None:
+        """Wake stream listeners: the visible state changed."""
+        with self.cond:
+            self.version += 1
+            self.cond.notify_all()
 
     def save_meta(self) -> None:
         """Feed state needed to resume after a restart (orders/fills/positions are in the journal)."""
@@ -104,6 +126,7 @@ class LiveSession:
                 self.engine.on_bars(bars)
                 self.next_ts = self.next_ts + pd.offsets.BDay(1)
             self.save_meta()
+        self.touch()
 
 
 class App:
@@ -121,6 +144,8 @@ class App:
             n = self.platform.users.import_users(self._meta.get("users", []))
             log.info("restored %d users from %s", n, db_dir)
         self.sessions: Dict[str, LiveSession] = {}
+        self.datasets: Dict[str, Dict[str, pd.DataFrame]] = {}      # user id -> uploaded OHLCV by symbol
+        self.shutting_down = False
         self.lock = threading.Lock()
         self.routes: Dict[Tuple[str, str], Tuple[Callable, bool]] = {}
         self._register()
@@ -182,7 +207,8 @@ class App:
         if meta.get("strategy"):
             strategies = [(P.create_strategy(user, meta["strategy"], meta["symbols"], **(meta.get("params") or {})), 1.0)]
         acc = P.accounts.link(user, "paper", {}, "ui-session")
-        engine = P.open_session(user, acc.account_id, strategies, store=store)
+        clock = SimClock()
+        engine = P.open_session(user, acc.account_id, strategies, clock=clock, store=store)
         orders = {o.client_order_id: o for o in store.load_orders()}
         fills = store.load_fills()
         for f in fills:
@@ -193,6 +219,7 @@ class App:
         sess = LiveSession(engine, meta["symbols"], meta["seed"], meta.get("strategy"), meta.get("params"), store)
         sess.last, sess.history = {k: float(v) for k, v in meta["last"].items()}, meta["history"]
         sess.next_ts = pd.Timestamp(meta["next_ts"])
+        clock.set((sess.next_ts - pd.offsets.BDay(1)).to_pydatetime())      # simulated time resumes at the last bar
         sess.rng = np.random.default_rng([meta["seed"], int(meta.get("bars", 0))])
         engine.start()
         rep = engine.recover()
@@ -203,8 +230,22 @@ class App:
         return sess
 
     # ---- helpers --------------------------------------------------------------------------
-    @staticmethod
-    def _data(body: Dict[str, Any]) -> Tuple[MarketData, List[str]]:
+    def _data(self, body: Dict[str, Any], user: Optional[User] = None) -> Tuple[MarketData, List[str]]:
+        """Synthetic universe, or the user's uploaded CSVs when ``dataset == "uploaded"``."""
+        if body.get("dataset") == "uploaded":
+            frames = self.datasets.get(user.user_id, {}) if user else {}
+            if not frames:
+                raise ValidationError("no uploaded data: upload at least one CSV in the Data tab")
+            wanted = [s.strip().upper() for s in body.get("symbols") or frames if s.strip()]
+            missing = [s for s in wanted if s not in frames]
+            if missing:
+                raise ValidationError(f"not uploaded: {missing}")
+            md = MarketData()
+            for s_ in wanted:
+                if len(frames[s_]) < 150:
+                    raise ValidationError(f"{s_}: need at least 150 rows, have {len(frames[s_])}")
+                md.add(s_, frames[s_])
+            return md, wanted
         symbols = [s.strip().upper() for s in body.get("symbols", ["AAA", "BBB", "CCC"]) if s.strip()]
         if not 1 <= len(symbols) <= 10 or not all(s.isalnum() and len(s) <= 8 for s in symbols):
             raise ValidationError("symbols: 1-10 alphanumeric tickers (max 8 chars)")
@@ -212,9 +253,27 @@ class App:
         if not 150 <= bars <= 3000:
             raise ValidationError("bars must be between 150 and 3000")
         md = MarketData()
-        for s, df in synthetic.universe(symbols, n=bars, seed=int(body.get("seed", 7))).items():
-            md.add(s, df)
+        for s_, df in synthetic.universe(symbols, n=bars, seed=int(body.get("seed", 7))).items():
+            md.add(s_, df)
         return md, symbols
+
+    @staticmethod
+    def _check_strategy(name: str) -> None:
+        if name in NEEDS_DATA:
+            raise ValidationError(f"'{name}' needs attached fundamentals/news data and cannot run from the UI")
+
+    @staticmethod
+    def _symbols_for(strategy: str, symbols: List[str]) -> List[str]:
+        return symbols[:2] if strategy == "pairs_trading" else symbols
+
+    @staticmethod
+    def _risk_measures(returns: pd.Series) -> Optional[Dict[str, float]]:
+        """Historical and parametric VaR / expected shortfall of per-bar returns (as positive loss fractions)."""
+        r = returns.dropna().to_numpy()
+        if len(r) < 30:
+            return None
+        return {"var_95": historical_var(r, 0.95), "var_99": historical_var(r, 0.99), "es_95": expected_shortfall(r, 0.95),
+                "es_99": expected_shortfall(r, 0.99), "parametric_var_99": parametric_var(r, 0.99), "bars": len(r)}
 
     def _session(self, user: User) -> LiveSession:
         s = self.sessions.get(user.user_id)
@@ -249,14 +308,16 @@ class App:
         @r("GET", "/api/strategies")
         def strategies(_u, _b):
             return [{"name": n, "params": STRATEGIES.get(n).PARAMS, "bounds": STRATEGIES.get(n).PARAM_BOUNDS,
-                     "doc": (STRATEGIES.get(n).__doc__ or "").strip().split("\n")[0]} for n in STRATEGIES.names()]
+                     "doc": (STRATEGIES.get(n).__doc__ or "").strip().split("\n")[0], "runnable": n not in NEEDS_DATA,
+                     "slow": n in SLOW} for n in STRATEGIES.names()]
 
         @r("POST", "/api/backtest")
         def backtest(u, b):
-            md, symbols = self._data(b)
+            md, symbols = self._data(b, u)
             target = b["spec"] if b.get("spec") else b["strategy"]
-            if not b.get("spec") and b["strategy"] == "pairs_trading":
-                symbols = symbols[:2]
+            if not b.get("spec"):
+                self._check_strategy(b["strategy"])
+                symbols = self._symbols_for(b["strategy"], symbols)
             res = P.backtest(u, target, md, symbols, b.get("params") or {})
             rep = res.report(n_trials=int(b.get("n_trials", 1)))
             eq = res.equity
@@ -269,7 +330,7 @@ class App:
                     "trades": trades.assign(entry_ts=trades["entry_ts"].astype(str),
                                             exit_ts=trades["exit_ts"].astype(str)).round(4).to_dict("records"),
                     "orders": res.order_count, "rejected": res.rejected_orders,
-                    "kill_switch": res.kill_switch_triggered, "symbols": symbols}
+                    "kill_switch": res.kill_switch_triggered, "symbols": symbols, "risk": self._risk_measures(res.returns)}
 
         @r("POST", "/api/optimize")
         def optimize(u, b):
@@ -281,7 +342,11 @@ class App:
                 raise ValidationError("n_iter must be between 5 and 60")
             if int(b.get("bars", 500)) > 1500:
                 raise ValidationError("bars must be <= 1500 for optimisation")
-            md, symbols = self._data({**b, "bars": b.get("bars", 500)})
+            self._check_strategy(b["strategy"])
+            if b["strategy"] in SLOW and n > 10:
+                raise ValidationError("this strategy retrains a model at every step: use 10 trials or fewer")
+            md, symbols = self._data({**b, "bars": b.get("bars", 500)}, u)
+            symbols = self._symbols_for(b["strategy"], symbols)
             cls = STRATEGIES.get(b["strategy"])
             if not cls.PARAM_BOUNDS:
                 raise ValidationError("strategy has no tunable parameters")
@@ -292,6 +357,112 @@ class App:
             return {"summary": res.summary(), "top": top.to_dict("records"),
                     "scores": [float(x) for x in res.trials["score"].replace([-np.inf], np.nan).dropna()],
                     "plateau": res.plateau_score(space)}
+
+        # ---- uploaded data -----------------------------------------------------------------------
+        @r("POST", "/api/data/upload")
+        def upload(u, b):
+            UserManager.authorize(u, Permission.RUN_BACKTEST)
+            sym = str(b.get("symbol", "")).strip().upper()
+            if not sym.isalnum() or len(sym) > 8:
+                raise ValidationError("symbol must be 1-8 letters/digits")
+            text = b.get("csv")
+            if not isinstance(text, str) or not text.strip():
+                raise ValidationError("csv text is required")
+            mine = self.datasets.setdefault(u.user_id, {})
+            if sym not in mine and len(mine) >= MAX_UPLOAD_SYMBOLS:
+                raise ValidationError(f"at most {MAX_UPLOAD_SYMBOLS} uploaded symbols per user")
+            try:
+                df = pd.read_csv(io.StringIO(text), nrows=MAX_UPLOAD_ROWS + 1)
+            except Exception as exc:  # noqa: BLE001 - any parser failure is the user's data problem
+                raise DataError(f"cannot parse CSV: {type(exc).__name__}") from None
+            if len(df) > MAX_UPLOAD_ROWS:
+                raise DataError(f"too many rows (max {MAX_UPLOAD_ROWS})")
+            df.columns = [str(c).strip().lower() for c in df.columns]
+            if "date" not in df.columns:
+                raise DataError("CSV needs a 'date' column plus open, high, low, close (volume optional)")
+            try:
+                df["date"] = pd.to_datetime(df["date"])
+            except Exception:  # noqa: BLE001
+                raise DataError("could not parse the 'date' column") from None
+            df = df.set_index("date").sort_index()
+            df.index.name = None
+            validate_ohlcv(df, sym)                                           # raises DataError with the exact problem
+            mine[sym] = df[[c for c in ("open", "high", "low", "close", "volume") if c in df.columns]].astype(float)
+            P.audit.record(u.username, "data.upload", symbol=sym, rows=len(df))
+            return {"symbol": sym, "rows": len(df), "start": df.index[0], "end": df.index[-1]}
+
+        @r("GET", "/api/data")
+        def list_data(u, _b):
+            return [{"symbol": k, "rows": len(v), "start": v.index[0], "end": v.index[-1]}
+                    for k, v in sorted(self.datasets.get(u.user_id, {}).items())]
+
+        @r("POST", "/api/data/clear")
+        def clear_data(u, _b):
+            self.datasets.pop(u.user_id, None)
+            return {"ok": True}
+
+        # ---- walk-forward and multi-strategy portfolio ---------------------------------------------
+        @r("POST", "/api/walkforward")
+        def walkforward(u, b):
+            UserManager.authorize(u, Permission.RUN_BACKTEST)
+            name = b["strategy"]
+            self._check_strategy(name)
+            cls = STRATEGIES.get(name)
+            if not cls.PARAM_BOUNDS:
+                raise ValidationError("strategy has no tunable parameters")
+            bars, train, test, n = (int(b.get("bars", 800)), int(b.get("train_bars", 300)), int(b.get("test_bars", 100)),
+                                    int(b.get("n_iter", 8)))
+            if bars > 1500 or not 3 <= n <= (8 if name in SLOW else 20):
+                raise ValidationError("bars must be <= 1500 and n_iter 3-20 (3-8 for model-based strategies)")
+            md, symbols = self._data({**b, "bars": bars}, u)
+            symbols = self._symbols_for(name, symbols)
+            wf = walk_forward(BacktestEngine(md, P.config), P._factory(name, symbols), ParameterSpace.from_bounds(cls.PARAM_BOUNDS),
+                              train, test, metric=b.get("metric", "sharpe"), method="random", n_iter=n, min_trades=1)
+            P.audit.record(u.username, "walkforward.run", strategy=name, folds=len(wf.folds))
+            folds = wf.folds.copy()
+            for c in ("train_start", "train_end", "test_start", "test_end"):
+                folds[c] = folds[c].astype(str).str[:10]
+            return {"folds": folds.round(4).to_dict("records"), "oos_equity": series_points(wf.oos_equity),
+                    "oos_metrics": wf.oos_metrics, "efficiency": wf.efficiency, "stability": wf.param_stability,
+                    "params": list(cls.PARAM_BOUNDS)}
+
+        @r("POST", "/api/portfolio")
+        def portfolio(u, b):
+            UserManager.authorize(u, Permission.RUN_BACKTEST)
+            items = b.get("strategies") or []
+            if not 1 <= len(items) <= 5:
+                raise ValidationError("choose 1-5 strategies")
+            pcts = [float(it.get("pct", 0)) for it in items]
+            if min(pcts) <= 0 or sum(pcts) > 100.0 + 1e-9:
+                raise ValidationError("each allocation must be > 0% and the total at most 100%")
+            if any(it["name"] in SLOW for it in items) and len(items) > 2:
+                raise ValidationError("model-based strategies are slow: combine at most 2 strategies")
+            md, symbols = self._data(b, u)
+
+            def build(i: int, it: Dict[str, Any]):
+                self._check_strategy(it["name"])
+                return STRATEGIES.create(it["name"], self._symbols_for(it["name"], symbols), strategy_id=f"{it['name']}#{i + 1}",
+                                         **(it.get("params") or {}))
+            combined = BacktestEngine(md, P.config).run([(build(i, it), pct / 100.0) for i, (it, pct) in enumerate(zip(items, pcts))])
+            alone = {f"{it['name']}#{i + 1}": BacktestEngine(md, P.config).run(build(i, it)).returns for i, it in enumerate(items)}
+            df = pd.DataFrame(alone).dropna()
+            suggested, corr = {}, None
+            if len(items) >= 2 and len(df) >= 20:
+                corr = df.corr().round(3).to_dict()
+                for m in ("equal", "inverse_vol", "risk_parity", "min_variance"):
+                    try:
+                        suggested[m] = {k: round(v, 4) for k, v in FundAllocator(1.0).weights(df, method=m).items()}
+                    except PlatformError:
+                        pass
+            trades = combined.trades_frame()
+            contrib = contribution_by(combined.trades, "strategy_id").reset_index().round(4).to_dict("records") if len(trades) else []
+            P.audit.record(u.username, "portfolio.run", strategies=[it["name"] for it in items])
+            return {"metrics": combined.metrics(), "equity": series_points(combined.equity),
+                    "drawdown": series_points(drawdown_series(combined.equity)), "contributions": contrib,
+                    "standalone": {k: {"total_return": float((1 + v).prod() - 1), "sharpe": float(v.mean() / v.std() * math.sqrt(252)) if v.std() > 0 else 0.0}
+                                   for k, v in alone.items()},
+                    "correlation": corr, "suggested_weights": suggested, "risk": self._risk_measures(combined.returns),
+                    "allocation": {f"{it['name']}#{i + 1}": pct for i, (it, pct) in enumerate(zip(items, pcts))}}
 
         # ---- live (paper) session -----------------------------------------------------------
         @r("POST", "/api/session/open")
@@ -309,7 +480,9 @@ class App:
                     raise ValidationError("a saved session exists; resume it from the Paper trading tab or close it first")
                 store = SqliteStore(self._session_path(u)) if self._session_path(u) else None
                 acc = P.accounts.link(u, "paper", {}, "ui-session")
-                engine = P.open_session(u, acc.account_id, strategies, store=store)
+                # simulated time driven by the synthetic feed (like a backtest), so risk windows such as the
+                # runaway-order guard see bar-to-bar time, not the microseconds between clicks
+                engine = P.open_session(u, acc.account_id, strategies, clock=SimClock(), store=store)
                 engine.start()
                 sess = LiveSession(engine, symbols, int(b.get("seed", 1)), b.get("strategy") or None,
                                    b.get("params") or {}, store)
@@ -339,16 +512,60 @@ class App:
         @r("POST", "/api/session/order")
         def order(u, b):
             s = self._session(u)
+            algo = b.get("algo")
             with s.lock:
+                if algo:                                                  # work the order as many risk-checked child orders
+                    UserManager.authorize(u, Permission.PLACE_ORDER)
+                    name = str(algo.get("name", "")).lower()
+                    if name not in ALGO_NAMES:
+                        raise ValidationError(f"algo must be one of {sorted(ALGO_NAMES)}")
+                    params: Dict[str, Any] = {}
+                    if "bars" in algo and name in ("twap", "vwap", "is"):
+                        params["bars"] = int(algo["bars"])
+                        if not 2 <= params["bars"] <= 50:
+                            raise ValidationError("bars must be 2-50")
+                    if name == "pov":
+                        params["participation"] = float(algo.get("participation", 0.1))
+                        if not 0.01 <= params["participation"] <= 0.5:
+                            raise ValidationError("participation must be 1%-50%")
+                    if name == "iceberg":
+                        params["display"] = float(algo.get("display", 10))
+                        if params["display"] <= 0:
+                            raise ValidationError("display size must be positive")
+                    if name == "is":
+                        params["kappa"] = float(algo.get("kappa", 1.0))
+                    sym, qty = b["symbol"].upper(), float(b["quantity"])
+                    if sym not in s.symbols or qty <= 0:
+                        raise ValidationError("unknown symbol or non-positive quantity")
+                    s.engine.risk.kill_switch.check()
+                    parent = s.engine.algos.start(sym, Side(b["side"]), qty, name, s.last[sym], strategy_id=f"manual:{u.username}", **params)
+                    bar = s.engine._bars.get(sym)
+                    if bar is not None:
+                        s.engine.algos.work_now(parent, bar)
+                    P.audit.record(u.username, "algo.start", parent=parent.parent_id, algo=name, symbol=sym, qty=qty)
+                    s.touch()
+                    return {"parent": parent_tca(parent), **self._snapshot(s)}
                 o = P.place_manual_order(u, s.engine, b["symbol"].upper(), Side(b["side"]), float(b["quantity"]),
                                          OrderType(b.get("type", "MARKET")),
                                          float(b["limit_price"]) if b.get("limit_price") else None)
+            s.touch()
             return {"order": self._order(o), **self._snapshot(s)}
+
+        @r("POST", "/api/session/cancel")
+        def cancel_one(u, b):
+            UserManager.authorize(u, Permission.CANCEL_ORDER)
+            s = self._session(u)
+            with s.lock:
+                ok = s.engine.execution.cancel(s.engine.oms.get(str(b["order_id"])))
+            s.touch()
+            return {"cancelled": ok, **self._snapshot(s)}
 
         @r("POST", "/api/session/cancel_all")
         def cancel_all(u, _b):
             s = self._session(u)
             n = P.cancel_all(u, s.engine)
+            s.engine.algos.cancel_all(reason="cancel all")
+            s.touch()
             return {"cancelled": n, **self._snapshot(s)}
 
         @r("POST", "/api/session/killswitch")
@@ -361,6 +578,7 @@ class App:
                     P.reset_kill_switch(u, s.engine, b.get("reason", ""))
                 else:
                     raise ValidationError("action must be trip or reset")
+            s.touch()
             return self._snapshot(s)
 
         @r("POST", "/api/session/close")
@@ -420,7 +638,21 @@ class App:
                              "max_daily_loss_pct": e.cfg.risk.max_daily_loss_pct,
                              "max_drawdown_pct": e.cfg.risk.max_drawdown_pct,
                              "rejections": e.risk.rejections, "exposure_scalar": e.risk.exposure_scalar()},
-                    "strategy_errors": e.strategy_errors, "anomalies": len(e.oms.anomalies)}
+                    "strategy_errors": e.strategy_errors, "anomalies": len(e.oms.anomalies),
+                    "parents": [parent_tca(p) for p in list(e.algos.parents.values())[-8:]][::-1],
+                    "tca": tca_summary(e.algos.parents.values()), "measures": self._live_measures(e), "version": s.version}
+
+    @staticmethod
+    def _live_measures(e) -> Dict[str, Any]:
+        """VaR/ES from the session's own equity returns, stress scenarios on current positions, reverse stress."""
+        eq = e.portfolio.equity_curve()
+        out: Dict[str, Any] = {"var": App._risk_measures(eq.pct_change().dropna()) if len(eq) > 31 else None}
+        values = {sy: p.market_value for sy, p in e.portfolio.open_positions().items()}
+        equity, gross = e.portfolio.equity, e.portfolio.gross_exposure
+        out["stress"] = [{"scenario": name, "pnl": stress_test(values, shocks)["total"], "pct_equity": stress_test(values, shocks)["total"] / equity}
+                         for name, shocks in HISTORICAL_SCENARIOS.items()] if values else []
+        out["reverse_stress_move"] = reverse_stress_loss(equity, gross, e.cfg.risk.max_daily_loss_pct) if gross > 0 else None
+        return out
 
 
 def make_handler(app: App):
@@ -457,10 +689,56 @@ def make_handler(app: App):
             self._headers(200, ctype + ("; charset=utf-8" if ctype.startswith("text") or "javascript" in ctype else ""), len(data))
             self.wfile.write(data)
 
+        def _stream(self) -> None:
+            """Server-Sent Events: push a full snapshot whenever the session changes (auth via the Authorization header,
+            so the token never appears in a URL)."""
+            auth = self.headers.get("Authorization", "")
+            try:
+                user = app.platform.users.user_from_token(auth[7:] if auth.startswith("Bearer ") else "")
+                UserManager.authorize(user, Permission.VIEW_PORTFOLIO)
+            except PlatformError as exc:
+                return self._json(401 if isinstance(exc, AuthenticationError) else 403, {"error": exc.code, "message": exc.message})
+            sess = app.sessions.get(user.user_id)
+            if sess is None:
+                return self._json(404, {"error": "NO_SESSION", "message": "no open session"})
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Security-Policy", "default-src 'self'")
+            self.end_headers()
+            self.close_connection = True
+            last, idle = -1, 0
+            try:
+                while not app.shutting_down:
+                    with sess.cond:
+                        if sess.version == last:
+                            sess.cond.wait(timeout=1.0)
+                        ver = sess.version
+                    if app.sessions.get(user.user_id) is not sess:
+                        self.wfile.write(b"event: closed\ndata: {}\n\n")
+                        self.wfile.flush()
+                        return
+                    if ver != last:
+                        payload = json.dumps(clean(app._snapshot(sess)))
+                        self.wfile.write(f"event: snapshot\ndata: {payload}\n\n".encode())
+                        self.wfile.flush()
+                        last, idle = ver, 0
+                    else:
+                        idle += 1
+                        if idle >= 15:
+                            self.wfile.write(b": keepalive\n\n")
+                            self.wfile.flush()
+                            idle = 0
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                return                                                    # the browser went away
+
         def _handle(self, method: str) -> None:
             path = urlparse(self.path).path
             if method == "GET" and not path.startswith("/api/"):
                 return self._static(path)
+            if method == "GET" and path == "/api/session/stream":
+                return self._stream()
             body: Dict[str, Any] = {}
             if method == "POST":
                 try:
@@ -488,13 +766,22 @@ def make_handler(app: App):
     return Handler
 
 
+def create_server(app: App, host: str = "127.0.0.1", port: int = 8080) -> ThreadingHTTPServer:
+    """Threaded server whose worker threads never block shutdown (open event streams would otherwise)."""
+    httpd = ThreadingHTTPServer((host, port), make_handler(app))
+    httpd.daemon_threads = True
+    httpd.block_on_close = False
+    return httpd
+
+
 def serve(host: str = "127.0.0.1", port: int = 8080, app: Optional[App] = None) -> None:
     app = app or App()
-    httpd = ThreadingHTTPServer((host, port), make_handler(app))
+    httpd = create_server(app, host, port)
     print(f"algoplatform UI on http://{host}:{port}  (Ctrl+C to stop)")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        app.shutting_down = True
         httpd.server_close()

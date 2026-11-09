@@ -165,6 +165,9 @@ const TABS = [
   { id: "backtest", label: "Backtest", build: backtestView },
   { id: "builder", label: "Strategy builder", build: builderView },
   { id: "optimize", label: "Optimise", build: optimizeView },
+  { id: "walkforward", label: "Walk-forward", build: walkForwardView },
+  { id: "portfolio", label: "Portfolio", build: portfolioView },
+  { id: "data", label: "Data", build: dataView },
   { id: "live", label: "Paper trading", build: liveView },
   { id: "admin", label: "Admin & audit", build: adminView, perm: ["users:manage", "risk:manage"] },
 ];
@@ -217,11 +220,26 @@ function paramInputs(container, strat) {
 }
 
 function dataFields() {
+  const source = h("select", { "aria-label": "data source" }, h("option", { value: "synthetic" }, "Synthetic"), h("option", { value: "uploaded" }, "Uploaded CSV"));
   const symbols = h("input", { value: "AAA,BBB,CCC", style: "width:150px", "aria-label": "symbols" });
   const bars = h("input", { type: "number", value: 756, min: 150, max: 3000, style: "width:90px" });
   const seed = h("input", { type: "number", value: 7, style: "width:80px" });
-  return { symbols, bars, seed, nodes: [field("Symbols (synthetic)", symbols), field("Bars", bars), field("Seed", seed)],
-    get: () => ({ symbols: symbols.value.split(",").map((x) => x.trim()).filter(Boolean), bars: Number(bars.value), seed: Number(seed.value) }) };
+  const sync = () => { const up = source.value === "uploaded"; symbols.disabled = bars.disabled = seed.disabled = up; };
+  source.addEventListener("change", sync);
+  return { source, symbols, bars, seed, nodes: [field("Data", source), field("Symbols (synthetic)", symbols), field("Bars", bars), field("Seed", seed)],
+    get: () => source.value === "uploaded" ? { dataset: "uploaded" }
+      : { symbols: symbols.value.split(",").map((x) => x.trim()).filter(Boolean), bars: Number(bars.value), seed: Number(seed.value) } };
+}
+
+function riskCard(risk, title) {
+  title = title || "Risk: value at risk and expected shortfall";
+  if (!risk) return h("div", { class: "card" }, h("h2", null, title), h("p", { class: "hint" }, "Needs at least 30 return observations."));
+  return h("div", { class: "card" }, h("h2", null, title),
+    table([{ key: "k", label: "Measure" }, { key: "v", label: "Loss per bar" }], [
+      { k: "VaR 95%", v: fmt.pct(risk.var_95) }, { k: "VaR 99%", v: fmt.pct(risk.var_99) },
+      { k: "Expected shortfall 95%", v: fmt.pct(risk.es_95) }, { k: "Expected shortfall 99%", v: fmt.pct(risk.es_99) },
+      { k: "Parametric VaR 99% (assumes normal)", v: fmt.pct(risk.parametric_var_99) }]),
+    h("p", { class: "hint" }, `From ${risk.bars} bars. A bar worse than the 95% VaR happens about 1 time in 20; expected shortfall is the average loss on those bad bars. A parametric figure well below the historical one points to fat tails.`));
 }
 
 // ----- backtest results -----
@@ -245,6 +263,7 @@ function backtestResults(r) {
     h("div", { class: "card" }, h("h2", null, "Trade statistics"), table([{ key: "k", label: "Metric" }, { key: "v", label: "Value" }],
       Object.entries(t).map(([k, v]) => ({ k: k.replace(/_/g, " "), v: typeof v === "number" ? fmt.num(v, 3) : v }))),
       sig ? h("p", { class: "hint" }, `Probability the true Sharpe > 0: ${fmt.pct(sig.probabilistic_sharpe_vs_0, 1)} · deflated for ${sig.n_trials} trial(s): ${fmt.pct(sig.deflated_sharpe, 1)}`) : null)));
+  out.append(riskCard(r.risk));
   out.append(h("div", { class: "card" }, h("h2", null, `Trades (last ${r.trades.length})`),
     table([{ key: "symbol", label: "Symbol" }, { key: "direction", label: "Side", render: (d) => d > 0 ? "Long" : "Short" },
       { key: "quantity", label: "Qty" }, { key: "entry_price", label: "Entry", render: (v) => fmt.num(v) }, { key: "exit_price", label: "Exit", render: (v) => fmt.num(v) },
@@ -262,7 +281,7 @@ function backtestView() {
   const doc = h("p", { class: "hint" });
   const apply = () => { const st = list.find((x) => x.name === sel.value); getParams = paramInputs(params, st); doc.textContent = st.doc; };
   sel.addEventListener("change", apply);
-  strategies().then((l) => { list = l; l.forEach((x) => sel.append(h("option", { value: x.name }, x.name))); apply(); }).catch((e) => toast(e.message, true));
+  strategies().then((l) => { list = l.filter((x) => x.runnable); list.forEach((x) => sel.append(h("option", { value: x.name }, x.name))); apply(); }).catch((e) => toast(e.message, true));
   root.append(h("form", { class: "card", onsubmit: (e) => { e.preventDefault(); busy(run, async () => {
     const r = await api("/api/backtest", { strategy: sel.value, params: getParams(), ...df.get() });
     results.replaceChildren(backtestResults(r));
@@ -369,7 +388,7 @@ function optimizeView() {
   const n = h("input", { type: "number", value: 20, min: 5, max: 60, style: "width:80px" });
   const metric = h("select", null, ["sharpe", "sortino", "calmar", "total_return", "cagr"].map((x) => h("option", { value: x }, x)));
   const run = h("button", { class: "btn", type: "submit" }, "Optimise");
-  strategies().then((l) => l.filter((x) => Object.keys(x.bounds).length).forEach((x) => sel.append(h("option", { value: x.name }, x.name)))).catch((e) => toast(e.message, true));
+  strategies().then((l) => l.filter((x) => x.runnable && Object.keys(x.bounds).length).forEach((x) => sel.append(h("option", { value: x.name }, x.name)))).catch((e) => toast(e.message, true));
   root.append(h("form", { class: "card", onsubmit: (e) => { e.preventDefault(); busy(run, async () => {
     const r = await api("/api/optimize", { strategy: sel.value, method: method.value, n_iter: Number(n.value), metric: metric.value, ...df.get() });
     const keys = Object.keys(r.summary.best_params);
@@ -390,26 +409,172 @@ function optimizeView() {
   return root;
 }
 
-// ----- live paper trading -----
-let autoTimer = null;
-function stopAuto() { if (autoTimer) { clearInterval(autoTimer); autoTimer = null; } }
-
-function liveView() {
-  const root = h("div");
-  const draw = (snap) => root.replaceChildren(snap && snap.open ? liveDashboard(snap, draw) : liveOpen(draw));
-  api("/api/session").then(draw).catch((e) => { toast(e.message, true); draw(null); });
+// ----- data upload -----
+function dataView() {
+  const root = h("div"), listBox = h("div");
+  const file = h("input", { type: "file", accept: ".csv,text/csv", "aria-label": "CSV file" });
+  const sym = h("input", { placeholder: "symbol", style: "width:110px", "aria-label": "symbol" });
+  file.addEventListener("change", () => {
+    if (file.files[0] && !sym.value) sym.value = file.files[0].name.replace(/\.[^.]+$/, "").replace(/[^A-Za-z0-9]/g, "").slice(0, 8).toUpperCase();
+  });
+  const up = h("button", { class: "btn", type: "submit" }, "Upload");
+  const clear = h("button", { class: "btn ghost", type: "button" }, "Remove all my data");
+  const refresh = async () => {
+    const rows = await api("/api/data");
+    listBox.replaceChildren(table([{ key: "symbol", label: "Symbol" }, { key: "rows", label: "Rows" }, { key: "start", label: "From", render: (v) => String(v).slice(0, 10) },
+      { key: "end", label: "To", render: (v) => String(v).slice(0, 10) }], rows, "Nothing uploaded yet."));
+  };
+  refresh().catch((e) => toast(e.message, true));
+  clear.addEventListener("click", () => busy(clear, async () => { await api("/api/data/clear", {}); await refresh(); toast("Uploaded data removed"); }));
+  root.append(h("form", { class: "card", onsubmit: (e) => { e.preventDefault(); busy(up, async () => {
+    const f = file.files[0];
+    if (!f) throw new Error("Choose a CSV file first");
+    if (f.size > 900000) throw new Error("File too large (limit about 900 KB, 5,000 rows)");
+    const r = await api("/api/data/upload", { symbol: sym.value, csv: await f.text() });
+    toast(`Uploaded ${r.symbol}: ${r.rows} rows`);
+    file.value = ""; sym.value = "";
+    await refresh();
+  }); } },
+    h("h2", null, "Upload your own price data"),
+    h("p", { class: "hint" }, "CSV with a header row and columns date, open, high, low, close and optionally volume (one file per symbol, up to 5,000 rows, 10 symbols). Rows are checked for duplicate dates, gaps in ordering, non-positive prices and impossible highs/lows. Then choose \"Uploaded CSV\" as the data source on the Backtest, Optimise, Walk-forward and Portfolio tabs. Your data stays in server memory and is private to you."),
+    h("div", { class: "row" }, field("File", file), field("Symbol", sym), up, clear)),
+    h("div", { class: "card" }, h("h2", null, "Your uploaded data"), listBox));
   return root;
 }
 
-function liveOpen(draw) {
+// ----- walk-forward -----
+function walkForwardView() {
+  const root = h("div"), results = h("div"), df = dataFields();
+  df.bars.value = 800;
+  const sel = h("select"), metric = h("select", null, ["sharpe", "sortino", "calmar", "total_return"].map((x) => h("option", { value: x }, x)));
+  const train = h("input", { type: "number", value: 300, min: 50, style: "width:90px" }), test = h("input", { type: "number", value: 100, min: 10, style: "width:90px" });
+  const n = h("input", { type: "number", value: 8, min: 3, max: 20, style: "width:80px" });
+  const run = h("button", { class: "btn", type: "submit" }, "Run walk-forward");
+  strategies().then((l) => l.filter((x) => x.runnable && Object.keys(x.bounds).length).forEach((x) => sel.append(h("option", { value: x.name }, x.name)))).catch((e) => toast(e.message, true));
+  root.append(h("form", { class: "card", onsubmit: (e) => { e.preventDefault(); busy(run, async () => {
+    const r = await api("/api/walkforward", { strategy: sel.value, metric: metric.value, train_bars: Number(train.value), test_bars: Number(test.value), n_iter: Number(n.value), ...df.get() });
+    const m = r.oos_metrics;
+    const stab = Object.entries(r.stability).map(([k, v]) => ({ k, v: fmt.num(v, 2), verdict: v < 0.25 ? "stable" : v < 0.6 ? "drifting" : "unstable" }));
+    results.replaceChildren(
+      h("div", { class: "kpis" }, kpi("Folds", r.folds.length), kpi("Walk-forward efficiency", r.efficiency == null ? "–" : fmt.num(r.efficiency, 2), r.efficiency != null && r.efficiency < 0.5 ? "warn" : ""),
+        kpi("Out-of-sample return", fmt.pct(m.total_return), fmt.tone(m.total_return)), kpi("Out-of-sample Sharpe", fmt.num(m.sharpe)), kpi("OOS max drawdown", fmt.pct(m.max_drawdown), "bad")),
+      h("div", { class: "card" }, h("h2", null, "Stitched out-of-sample equity"), lineChart([{ name: "OOS equity", cls: "s0", fcls: "f0", points: r.oos_equity }], { yFmt: fmt.money, label: "out-of-sample equity" }),
+        h("p", { class: "hint" }, "Each fold picks parameters on its training window only, then trades the next window untouched. Efficiency is mean out-of-sample score divided by mean in-sample score: near 1 means the edge survived, well below 0.5 means the optimiser mostly fitted noise.")),
+      h("div", { class: "card" }, h("h2", null, "Folds"), table([{ key: "train_start", label: "Train from" }, { key: "train_end", label: "to" }, { key: "test_start", label: "Test from" }, { key: "test_end", label: "to" },
+        { key: "train_score", label: "Train score", render: (v) => fmt.num(v, 2) }, { key: "test_score", label: "Test score", tone: true, render: (v) => fmt.num(v, 2) },
+        { key: "test_return", label: "Test return", tone: true, render: (v) => fmt.pct(v) }, ...r.params.map((p) => ({ key: p, label: p }))], r.folds)),
+      h("div", { class: "card" }, h("h2", null, "Parameter stability"), table([{ key: "k", label: "Parameter" }, { key: "v", label: "Variation across folds" }, { key: "verdict", label: "Verdict" }], stab),
+        h("p", { class: "hint" }, "Variation is the standard deviation of the chosen value divided by its mean. Parameters that jump around between folds suggest the strategy has no stable optimum.")));
+  }); } }, h("h2", null, "Walk-forward analysis"),
+    h("div", { class: "row" }, field("Strategy", sel), field("Objective", metric), field("Train bars", train), field("Test bars", test), field("Trials per fold", n), ...df.nodes),
+    h("p", { class: "hint" }, "Total bars (above) must cover at least one train + test window. This runs trials x folds full backtests, so it can take a while."), h("div", { style: "margin-top:12px" }, run)), results);
+  return root;
+}
+
+// ----- multi-strategy portfolio -----
+function portfolioView() {
+  const root = h("div"), results = h("div"), rowsBox = h("div"), df = dataFields();
+  df.bars.value = 600;
+  let list = [];
+  const rows = [];
+  const total = h("span", { class: "muted" });
+  const recount = () => { const t = rows.reduce((a, r) => a + Number(r.pct.value || 0), 0); total.textContent = `Allocated ${fmt.num(t, 0)}% (cash ${fmt.num(Math.max(0, 100 - t), 0)}%)`; total.className = t > 100 ? "bad" : "muted"; };
+  function addRow(name, pct) {
+    const sel = h("select", { "aria-label": "strategy" }, list.map((x) => h("option", { value: x.name }, x.name)));
+    if (name) sel.value = name;
+    const pctIn = h("input", { type: "number", min: 1, max: 100, value: pct || 25, style: "width:80px", "aria-label": "allocation percent" });
+    pctIn.addEventListener("input", recount);
+    const row = h("div", { class: "row", style: "margin-bottom:8px" }, field("Strategy", sel), field("Capital %", pctIn),
+      h("button", { class: "btn ghost", type: "button", "aria-label": "remove strategy", onclick: () => { rows.splice(rows.indexOf(entry), 1); row.remove(); recount(); } }, "✕"));
+    const entry = { sel, pct: pctIn };
+    rows.push(entry);
+    rowsBox.append(row);
+    recount();
+  }
+  const run = h("button", { class: "btn", type: "submit" }, "Run portfolio");
+  const add = h("button", { class: "btn ghost", type: "button" }, "+ Add strategy");
+  add.addEventListener("click", () => { if (rows.length >= 5) return toast("At most 5 strategies", true); addRow(); });
+  strategies().then((l) => { list = l.filter((x) => x.runnable && !x.slow); addRow("sma_crossover", 40); addRow("zscore_reversion", 30); }).catch((e) => toast(e.message, true));
+  const applyWeights = (w) => { Object.values(w).forEach((v, i) => { if (rows[i]) rows[i].pct.value = Math.max(1, Math.round(v * 100)); }); recount(); toast("Allocations updated: run again to compare"); };
+  root.append(h("form", { class: "card", onsubmit: (e) => { e.preventDefault(); busy(run, async () => {
+    const r = await api("/api/portfolio", { strategies: rows.map((x) => ({ name: x.sel.value, pct: Number(x.pct.value) })), ...df.get() });
+    const m = r.metrics, ids = Object.keys(r.standalone);
+    const sw = Object.entries(r.suggested_weights || {});
+    results.replaceChildren(
+      h("div", { class: "kpis" }, kpi("Total return", fmt.pct(m.total_return), fmt.tone(m.total_return)), kpi("Sharpe", fmt.num(m.sharpe)), kpi("Max drawdown", fmt.pct(m.max_drawdown), "bad"), kpi("Volatility", fmt.pct(m.volatility))),
+      h("div", { class: "card" }, h("h2", null, "Combined equity"), lineChart([{ name: "Portfolio", cls: "s0", fcls: "f0", points: r.equity }], { yFmt: fmt.money }),
+        h("h3", { style: "margin-top:14px" }, "Drawdown"), lineChart([{ name: "Drawdown", cls: "neg", fcls: "fneg", points: r.drawdown }], { yFmt: (v) => fmt.pct(v, 1), fill: true, baseline: 0, small: true })),
+      h("div", { class: "grid cols-2" },
+        h("div", { class: "card" }, h("h2", null, "Allocation vs standalone"), table([{ key: "id", label: "Strategy" }, { key: "pct", label: "Capital %" }, { key: "ret", label: "Alone: return", tone: true, render: (v) => fmt.pct(v) }, { key: "sh", label: "Alone: Sharpe", render: (v) => fmt.num(v) }],
+          ids.map((id) => ({ id, pct: r.allocation[id], ret: r.standalone[id].total_return, sh: r.standalone[id].sharpe })))),
+        h("div", { class: "card" }, h("h2", null, "P&L contribution (closed trades)"), table([{ key: "strategy_id", label: "Strategy" }, { key: "pnl", label: "P&L", tone: true, render: (v) => fmt.num(v) }, { key: "trades", label: "Trades" }, { key: "win_rate", label: "Win rate", render: (v) => fmt.pct(v, 0) }], r.contributions, "No closed trades."),
+          h("p", { class: "hint" }, "Orders that serve several strategies at once are netted into one trade and listed under the combined name (a+b); close_out is the final liquidation at the end of the test."))),
+      r.correlation ? h("div", { class: "card" }, h("h2", null, "Return correlation"), table([{ key: "id", label: "" }, ...ids.map((c) => ({ key: c, label: c, render: (v) => fmt.num(v, 2) }))], ids.map((id) => ({ id, ...r.correlation[id] }))),
+        h("p", { class: "hint" }, "Low or negative correlation is what makes combining strategies worthwhile; two highly correlated strategies mostly duplicate each other.")) : null,
+      sw.length ? h("div", { class: "card" }, h("h2", null, "Suggested allocations (from the standalone return streams)"), h("div", { class: "scroll" }, h("table", null,
+        h("thead", null, h("tr", null, h("th", null, "Method"), ...ids.map((i) => h("th", null, i)), h("th", null, ""))),
+        h("tbody", null, sw.map(([method, w]) => h("tr", null, h("td", null, method), ...ids.map((i) => h("td", null, fmt.pct(w[i], 1))),
+          h("td", null, h("button", { class: "btn ghost", type: "button", onclick: () => applyWeights(w) }, "Use"))))))),
+        h("p", { class: "hint" }, "Equal, inverse-volatility, risk-parity and minimum-variance weights computed in-sample on the same history, so treat them as starting points, not forecasts.")) : null,
+      riskCard(r.risk, "Portfolio risk: value at risk and expected shortfall"));
+  }); } }, h("h2", null, "Run several strategies together"), rowsBox, h("div", { class: "row" }, add, total),
+    h("div", { class: "row", style: "margin-top:12px" }, ...df.nodes),
+    h("p", { class: "hint" }, "Each strategy trades its own slice of capital through the same risk gate; opposing views on the same symbol net out before any order is sent. Parameters use each strategy's defaults."), h("div", { style: "margin-top:12px" }, run)), results);
+  return root;
+}
+
+// ----- live paper trading -----
+let autoTimer = null, streamCtl = null;
+function stopStream() { if (streamCtl) { streamCtl.abort(); streamCtl = null; } }
+function stopAuto() { if (autoTimer) { clearInterval(autoTimer); autoTimer = null; } stopStream(); }
+
+/* Server-Sent Events over fetch: the bearer token travels in a header and never appears in a URL. */
+async function startStream(onSnapshot, onClosed) {
+  stopStream();
+  const ctl = new AbortController();
+  streamCtl = ctl;
+  try {
+    const res = await fetch("/api/session/stream", { headers: { Authorization: "Bearer " + store.token }, signal: ctl.signal });
+    if (!res.ok || !res.body) return;
+    const reader = res.body.getReader(), dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf("\n\n")) >= 0) {
+        const block = buf.slice(0, i);
+        buf = buf.slice(i + 2);
+        let ev = "message", data = "";
+        for (const line of block.split("\n")) {
+          if (line.startsWith("event:")) ev = line.slice(6).trim();
+          else if (line.startsWith("data:")) data += line.slice(5).trim();
+        }
+        if (ev === "snapshot" && data) onSnapshot(JSON.parse(data));
+        else if (ev === "closed") { onClosed(); return; }
+      }
+    }
+  } catch (e) { /* aborted or lost: buttons still refresh the view directly */ }
+}
+
+function liveView() {
+  const root = h("div");
+  const show = (snap) => { stopAuto(); root.replaceChildren(snap && snap.open ? liveDashboard(snap, show) : liveOpen(show)); };
+  api("/api/session").then(show).catch((e) => { toast(e.message, true); show(null); });
+  return root;
+}
+
+function liveOpen(show) {
   const symbols = h("input", { value: "AAA,BBB", style: "width:150px" });
   const sel = h("select", null, h("option", { value: "" }, "None (manual trading only)"));
-  strategies().then((l) => l.filter((x) => x.name !== "pairs_trading" && x.name !== "momentum_rotation").forEach((x) => sel.append(h("option", { value: x.name }, x.name)))).catch(() => {});
+  strategies().then((l) => l.filter((x) => x.runnable && !x.slow && x.name !== "pairs_trading" && x.name !== "momentum_rotation")
+    .forEach((x) => sel.append(h("option", { value: x.name }, x.name)))).catch(() => {});
   const btn = h("button", { class: "btn", type: "submit" }, "Open paper session");
   return h("form", { class: "card", onsubmit: (e) => { e.preventDefault(); busy(btn, async () => {
-    draw(await api("/api/session/open", { symbols: symbols.value.split(",").map((x) => x.trim()).filter(Boolean), strategy: sel.value || undefined }));
+    show(await api("/api/session/open", { symbols: symbols.value.split(",").map((x) => x.trim()).filter(Boolean), strategy: sel.value || undefined }));
   }); } }, h("h2", null, "Paper trading session"),
-    h("p", { class: "hint" }, "A simulated broker and a synthetic random-walk price feed. Every order goes through the same risk gate, order manager and kill switch as the backtester. No real money or real market data is involved."),
+    h("p", { class: "hint" }, "A simulated broker and a synthetic random-walk price feed on simulated time. Every order goes through the same risk gate, order manager and kill switch as the backtester; large orders can be worked by an execution algo. No real money or real market data is involved. With the server started using --db-dir, the session survives a restart."),
     h("div", { class: "row" }, field("Symbols", symbols), field("Run a strategy", sel)), h("div", { style: "margin-top:12px" }, btn));
 }
 
@@ -422,33 +587,65 @@ function meter(value, limit, label) {
     h("div", { class: "meter " + cls, role: "progressbar", "aria-valuenow": (frac * 100).toFixed(0), "aria-valuemin": 0, "aria-valuemax": 100 }, bar));
 }
 
-function liveDashboard(snap, draw) {
-  const p = snap.portfolio, ks = snap.kill_switch, halted = ks.state === "TRIGGERED";
-  const act = (btn, path, body) => busy(btn, async () => { draw(await api(path, body)); });
-  const step = (n) => { const b = h("button", { class: "btn ghost" }, "Step +" + n); b.addEventListener("click", () => act(b, "/api/session/step", { n })); return b; };
-  const auto = h("button", { class: "btn ghost" }, autoTimer ? "Stop auto" : "Auto-step");
+const OPEN_STATUSES = new Set(["ACKNOWLEDGED", "PARTIALLY_FILLED", "PENDING"]);
+
+/* Build the controls ONCE and then only refresh the data panels, so streamed updates never wipe what the user is typing. */
+function liveDashboard(initial, show) {
+  const ui = {
+    status: h("span"), kpis: h("div", { class: "kpis" }), equity: h("div"), prices: h("div", { class: "grid" }),
+    risk: h("div"), measures: h("div"), positions: h("div"), parents: h("div"), orders: h("div"),
+  };
+  ui.banner = h("div", { class: "banner" });
+  const update = (snap) => renderLive(ui, snap, act);
+  const act = (btn, path, body) => busy(btn, async () => { update(await api(path, body)); });
+  const stepBtn = (n) => { const b = h("button", { class: "btn ghost", type: "button" }, "Step +" + n); b.addEventListener("click", () => act(b, "/api/session/step", { n })); return b; };
+  const auto = h("button", { class: "btn ghost", type: "button" }, "Auto-step");
   auto.addEventListener("click", () => {
-    if (autoTimer) { stopAuto(); draw(snap); return; }
-    autoTimer = setInterval(async () => { try { draw(await api("/api/session/step", { n: 1 })); } catch (e) { stopAuto(); toast(e.message, true); } }, 1000);
+    if (autoTimer) { clearInterval(autoTimer); autoTimer = null; auto.textContent = "Auto-step"; return; }
+    autoTimer = setInterval(async () => { try { update(await api("/api/session/step", { n: 1 })); } catch (e) { clearInterval(autoTimer); autoTimer = null; auto.textContent = "Auto-step"; toast(e.message, true); } }, 1000);
     auto.textContent = "Stop auto";
   });
-  const closeBtn = h("button", { class: "btn ghost" }, "Close session");
-  closeBtn.addEventListener("click", () => { stopAuto(); busy(closeBtn, async () => { draw(await api("/api/session/close", {})); }); });
+  const closeBtn = h("button", { class: "btn ghost", type: "button" }, "Close session");
+  closeBtn.addEventListener("click", () => { stopAuto(); busy(closeBtn, async () => { show(await api("/api/session/close", {})); }); });
+  ui.banner.append(ui.status, h("span", { class: "spacer" }), stepBtn(1), stepBtn(10), stepBtn(50), auto, closeBtn);
 
-  const sym = h("select", null, snap.symbols.map((x) => h("option", { value: x }, x)));
+  // ---- order ticket (static) ----
+  const sym = h("select", null, initial.symbols.map((x) => h("option", { value: x }, x)));
   const side = h("select", null, h("option", { value: "BUY" }, "Buy"), h("option", { value: "SELL" }, "Sell"));
-  const qty = h("input", { type: "number", min: 1, value: 10, style: "width:90px" });
+  const qty = h("input", { type: "number", min: 1, value: 40, style: "width:90px" });
   const type = h("select", null, h("option", { value: "MARKET" }, "Market"), h("option", { value: "LIMIT" }, "Limit"));
   const lim = h("input", { type: "number", step: "0.01", placeholder: "limit price", style: "width:110px" });
+  const algo = h("select", { "aria-label": "execution algo" }, h("option", { value: "" }, "Single order"), h("option", { value: "twap" }, "TWAP"), h("option", { value: "vwap" }, "VWAP"),
+    h("option", { value: "pov" }, "POV"), h("option", { value: "iceberg" }, "Iceberg"), h("option", { value: "is" }, "Implementation shortfall"));
+  const bars = h("input", { type: "number", min: 2, max: 50, value: 5, style: "width:70px", "aria-label": "algo bars" });
+  const part = h("input", { type: "number", min: 1, max: 50, value: 10, style: "width:70px", "aria-label": "participation percent" });
+  const disp = h("input", { type: "number", min: 1, value: 10, style: "width:80px", "aria-label": "iceberg display size" });
+  const barsF = field("Over bars", bars), partF = field("Participation %", part), dispF = field("Display size", disp);
+  const syncAlgo = () => {
+    const a = algo.value;
+    barsF.hidden = !["twap", "vwap", "is"].includes(a); partF.hidden = a !== "pov"; dispF.hidden = a !== "iceberg";
+    type.disabled = lim.disabled = !!a;
+  };
+  algo.addEventListener("change", syncAlgo);
+  syncAlgo();
   const send = h("button", { class: "btn", type: "submit" }, "Send order");
   const ticket = h("form", { class: "card", onsubmit: (e) => { e.preventDefault(); busy(send, async () => {
-    const r = await api("/api/session/order", { symbol: sym.value, side: side.value, quantity: Number(qty.value), type: type.value, limit_price: lim.value || null });
-    toast(`Order ${r.order.status}${r.order.reason ? ": " + r.order.reason : ""}`, r.order.status === "REJECTED");
-    draw(r);
+    const body = { symbol: sym.value, side: side.value, quantity: Number(qty.value) };
+    if (algo.value) {
+      body.algo = { name: algo.value };
+      if (!barsF.hidden) body.algo.bars = Number(bars.value);
+      if (!partF.hidden) body.algo.participation = Number(part.value) / 100;
+      if (!dispF.hidden) body.algo.display = Number(disp.value);
+    } else { body.type = type.value; body.limit_price = lim.value || null; }
+    const r = await api("/api/session/order", body);
+    if (r.parent) toast(`Algo ${r.parent.algo} started: ${r.parent.total} ${r.parent.side} ${r.parent.symbol}`);
+    else toast(`Order ${r.order.status}${r.order.reason ? ": " + r.order.reason : ""}`, r.order.status === "REJECTED");
+    update(r);
   }); } }, h("h2", null, "Order ticket"),
-    h("div", { class: "row" }, field("Symbol", sym), field("Side", side), field("Qty", qty), field("Type", type), field("Limit", lim), send),
-    h("p", { class: "hint" }, "Market orders fill at the next bar's open. Orders failing a risk check are rejected, never sent."));
+    h("div", { class: "row" }, field("Symbol", sym), field("Side", side), field("Qty", qty), field("Type", type), field("Limit", lim), field("Execution", algo), barsF, partF, dispF, send),
+    h("p", { class: "hint" }, "Market orders fill at the next bar's open. An algo splits the order into child orders, each risk-checked like any other, and reports its cost versus the arrival price (TCA) below."));
 
+  // ---- kill switch (static, so the reason box keeps its text) ----
   const reason = h("input", { placeholder: "reason (required to reset)", style: "min-width:220px" });
   const trip = h("button", { class: "btn danger", type: "button" }, "TRIP kill switch");
   const reset = h("button", { class: "btn ghost", type: "button" }, "Reset");
@@ -457,30 +654,62 @@ function liveDashboard(snap, draw) {
   const cancelAll = h("button", { class: "btn ghost", type: "button" }, "Cancel all orders");
   cancelAll.addEventListener("click", () => act(cancelAll, "/api/session/cancel_all", {}));
 
-  const posRows = Object.entries(p.positions).map(([k, v]) => ({ symbol: k, ...v }));
-  return h("div", null,
-    h("div", { class: "banner" + (halted ? " halt" : "") },
-      halted ? h("strong", { class: "bad" }, "TRADING HALTED") : h("strong", { class: "good" }, "Kill switch armed"),
-      halted ? h("span", null, ks.reason + " (" + ks.source + ")") : h("span", { class: "muted" }, `${snap.bars} bars processed`),
-      h("span", { class: "spacer" }), step(1), step(10), step(50), auto, closeBtn),
-    h("div", { class: "kpis" }, kpi("Equity", fmt.money(p.equity)), kpi("Cash", fmt.money(p.cash)), kpi("Realized P&L", fmt.money(p.realized), fmt.tone(p.realized)),
-      kpi("Unrealized P&L", fmt.money(p.unrealized), fmt.tone(p.unrealized)), kpi("Gross exposure", fmt.money(p.gross)), kpi("Strategy errors", snap.strategy_errors, snap.strategy_errors ? "bad" : "")),
-    h("div", { class: "grid cols-2" },
-      h("div", { class: "card" }, h("h2", null, "Equity"), lineChart([{ name: "Equity", cls: "s0", fcls: "f0", points: snap.equity_curve }], { yFmt: fmt.money, label: "live equity" })),
-      h("div", { class: "card" }, h("h2", null, "Prices"), h("div", { class: "grid" }, snap.symbols.map((x) => h("div", null, h("div", { class: "row" }, h("strong", null, x), h("span", { class: "spacer" }), h("span", null, fmt.num(snap.prices[x]))),
-        lineChart([{ name: x, cls: "s0", fcls: "f0", points: snap.history[x].map((v, i) => [String(i), v]) }], { small: true, label: x + " price" })))))),
+  const frame = h("div", null, ui.banner, ui.kpis,
+    h("div", { class: "grid cols-2" }, h("div", { class: "card" }, h("h2", null, "Equity"), ui.equity), h("div", { class: "card" }, h("h2", null, "Prices"), ui.prices)),
     ticket,
-    h("div", { class: "grid cols-2" },
-      h("div", { class: "card" }, h("h2", null, "Risk"), meter(snap.risk.daily_pnl_pct, snap.risk.max_daily_loss_pct, "Daily P&L"), h("div", { style: "height:10px" }),
-        meter(snap.risk.drawdown, snap.risk.max_drawdown_pct, "Drawdown"),
-        h("p", { class: "hint" }, "Size multiplier from drawdown de-risking: " + fmt.num(snap.risk.exposure_scalar, 2) + (Object.keys(snap.risk.rejections).length ? " · rejections: " + JSON.stringify(snap.risk.rejections) : ""))),
+    h("div", { class: "grid cols-2" }, h("div", { class: "card" }, h("h2", null, "Limits"), ui.risk),
       h("div", { class: "card" }, h("h2", null, "Kill switch"), h("div", { class: "row" }, reason, trip, reset, cancelAll),
-        h("p", { class: "hint" }, "Tripping cancels resting orders, flattens positions and blocks new orders. Resetting needs the Risk Manager or Admin role and a written reason (a trader will be refused)."))),
-    h("div", { class: "card" }, h("h2", null, "Positions"), table([{ key: "symbol", label: "Symbol" }, { key: "qty", label: "Qty" }, { key: "avg", label: "Avg", render: (v) => fmt.num(v) },
-      { key: "last", label: "Last", render: (v) => fmt.num(v) }, { key: "upl", label: "Unrealized", tone: true, render: (v) => fmt.num(v) }], posRows, "Flat.")),
-    h("div", { class: "card" }, h("h2", null, "Orders"), table([{ key: "id", label: "ID", render: (v) => v.slice(-8) }, { key: "symbol", label: "Symbol" }, { key: "side", label: "Side" }, { key: "qty", label: "Qty" },
-      { key: "type", label: "Type" }, { key: "status", label: "Status", render: (v) => h("span", { class: "badge " + v }, v) }, { key: "avg", label: "Avg fill", render: (v) => v ? fmt.num(v) : "–" },
-      { key: "strategy", label: "Source" }, { key: "reason", label: "Reason" }], snap.orders, "No orders yet.")));
+        h("p", { class: "hint" }, "Tripping cancels resting orders and running algos, flattens positions and blocks new orders. Resetting needs the Risk Manager or Admin role and a written reason (a trader will be refused)."))),
+    ui.measures,
+    h("div", { class: "card" }, h("h2", null, "Positions"), ui.positions),
+    h("div", { class: "card" }, h("h2", null, "Execution algos and cost analysis"), ui.parents),
+    h("div", { class: "card" }, h("h2", null, "Orders"), ui.orders));
+  update(initial);
+  startStream(update, () => show({ open: false }));
+  return frame;
+}
+
+function renderLive(ui, snap, act) {
+  const p = snap.portfolio, ks = snap.kill_switch, halted = ks.state === "TRIGGERED";
+  ui.banner.className = "banner" + (halted ? " halt" : "");
+  ui.status.replaceChildren(halted ? h("strong", { class: "bad" }, "TRADING HALTED") : h("strong", { class: "good" }, "Kill switch armed"), " ",
+    halted ? `${ks.reason} (${ks.source})` : `${snap.bars} bars processed`, snap.resumed ? (snap.recovery && !snap.recovery.clean ? " · resumed with a reconciliation break" : " · resumed after restart") : "");
+  ui.kpis.replaceChildren(kpi("Equity", fmt.money(p.equity)), kpi("Cash", fmt.money(p.cash)), kpi("Realized P&L", fmt.money(p.realized), fmt.tone(p.realized)),
+    kpi("Unrealized P&L", fmt.money(p.unrealized), fmt.tone(p.unrealized)), kpi("Gross exposure", fmt.money(p.gross)), kpi("Strategy errors", snap.strategy_errors, snap.strategy_errors ? "bad" : ""));
+  ui.equity.replaceChildren(lineChart([{ name: "Equity", cls: "s0", fcls: "f0", points: snap.equity_curve }], { yFmt: fmt.money, label: "live equity" }));
+  ui.prices.replaceChildren(...snap.symbols.map((x) => h("div", null, h("div", { class: "row" }, h("strong", null, x), h("span", { class: "spacer" }), h("span", null, fmt.num(snap.prices[x]))),
+    lineChart([{ name: x, cls: "s0", fcls: "f0", points: snap.history[x].map((v, i) => [String(i), v]) }], { small: true, label: x + " price" }))));
+  ui.risk.replaceChildren(meter(snap.risk.daily_pnl_pct, snap.risk.max_daily_loss_pct, "Daily P&L"), h("div", { style: "height:10px" }), meter(snap.risk.drawdown, snap.risk.max_drawdown_pct, "Drawdown"),
+    h("p", { class: "hint" }, "Size multiplier from drawdown de-risking: " + fmt.num(snap.risk.exposure_scalar, 2) + (Object.keys(snap.risk.rejections).length ? " · rejections: " + JSON.stringify(snap.risk.rejections) : "")));
+
+  const m = snap.measures || {};
+  const stressRows = m.stress || [];
+  ui.measures.replaceChildren(h("div", { class: "grid cols-2" },
+    m.var ? riskCard(m.var, "Value at risk (this session)") : h("div", { class: "card" }, h("h2", null, "Value at risk (this session)"), h("p", { class: "hint" }, "Needs about 35 bars of history: use Step +50.")),
+    h("div", { class: "card" }, h("h2", null, "Stress tests on current positions"),
+      stressRows.length ? table([{ key: "scenario", label: "Scenario" }, { key: "pnl", label: "P&L", tone: true, render: (v) => fmt.num(v) }, { key: "pct_equity", label: "% of equity", tone: true, render: (v) => fmt.pct(v) }], stressRows)
+        : h("p", { class: "hint" }, "No open positions to stress."),
+      m.reverse_stress_move ? h("p", { class: "hint" }, `A uniform adverse market move of about ${fmt.pct(m.reverse_stress_move, 1)} would reach the daily loss limit at the current exposure.`) : null)));
+
+  const posRows = Object.entries(p.positions).map(([k, v]) => ({ symbol: k, ...v }));
+  ui.positions.replaceChildren(table([{ key: "symbol", label: "Symbol" }, { key: "qty", label: "Qty" }, { key: "avg", label: "Avg", render: (v) => fmt.num(v) },
+    { key: "last", label: "Last", render: (v) => fmt.num(v) }, { key: "upl", label: "Unrealized", tone: true, render: (v) => fmt.num(v) }], posRows, "Flat."));
+
+  const parents = snap.parents || [];
+  const costCls = (v) => (v > 0 ? "bad" : v < 0 ? "good" : "");
+  ui.parents.replaceChildren(
+    parents.length ? table([{ key: "parent", label: "Parent", render: (v) => v.slice(-6) }, { key: "algo", label: "Algo" }, { key: "symbol", label: "Symbol" }, { key: "side", label: "Side" },
+      { key: "filled", label: "Filled", render: (v, r) => `${fmt.num(v, 0)} / ${fmt.num(r.total, 0)}` }, { key: "status", label: "Status", render: (v) => h("span", { class: "badge " + v }, v) },
+      { key: "children", label: "Child orders" }, { key: "slippage_bps", label: "Slippage (bps)", render: (v) => h("span", { class: costCls(v) }, fmt.num(v, 1)) },
+      { key: "shortfall_bps", label: "Shortfall incl. fees (bps)", render: (v) => h("span", { class: costCls(v) }, fmt.num(v, 1)) }], parents)
+      : h("p", { class: "hint" }, "No algo orders yet. Pick an execution algo in the order ticket."),
+    snap.tca && snap.tca.parents ? h("p", { class: "hint" }, `Average shortfall ${fmt.num(snap.tca.avg_shortfall_bps, 1)} bps over ${snap.tca.parents} algo order(s). Positive means you paid more than the price when the decision was made.`) : null);
+
+  ui.orders.replaceChildren(table([{ key: "id", label: "ID", render: (v) => v.slice(-8) }, { key: "symbol", label: "Symbol" }, { key: "side", label: "Side" }, { key: "qty", label: "Qty" },
+    { key: "type", label: "Type" }, { key: "status", label: "Status", render: (v) => h("span", { class: "badge " + v }, v) }, { key: "avg", label: "Avg fill", render: (v) => v ? fmt.num(v) : "–" },
+    { key: "strategy", label: "Source" }, { key: "reason", label: "Reason" },
+    { key: "id", label: "", render: (v, r) => OPEN_STATUSES.has(r.status) ? h("button", { class: "btn ghost", type: "button", onclick: (e) => act(e.currentTarget, "/api/session/cancel", { order_id: v }) }, "Cancel") : "" }],
+    snap.orders, "No orders yet."));
 }
 
 // ----- admin -----
