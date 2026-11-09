@@ -1,6 +1,6 @@
 # Master Topic List: Building an Algorithmic Trading Platform
 
-746 topics grouped into 18 parts by type, numbered continuously. Duplicates from earlier drafts were merged.
+850 topics grouped into 18 parts by type, numbered continuously. Duplicates from earlier drafts were merged.
 
 ## Contents
 
@@ -16,7 +16,7 @@
 - PART 10. Research, Backtesting, and Validation (27 topics)
 - PART 11. Portfolio Construction and Capital Allocation (35 topics)
 - PART 12. Risk Management (23 topics)
-- PART 13. Execution (7 topics)
+- PART 13. Execution (111 topics)
 - PART 14. Costs, Taxes, and Accounting (10 topics)
 - PART 15. Performance and Analytics (119 topics)
 - PART 16. Architecture, Engineering, and Security (40 topics)
@@ -678,300 +678,426 @@
 
 ## PART 13. Execution
 
-### 13.1 Execution engine
-520. Order Management System (OMS)
-521. Execution Management System (EMS)
-522. Smart order routing and execution algos (TWAP, VWAP, POV, iceberg)
-523. Broker and exchange connectivity (FIX, REST, WebSocket)
-524. Order state machine, retries, idempotency, reconciliation
-525. Paper trading and simulated exchange
-526. High-frequency and low-latency optimization (FPGA, kernel bypass)
+### 13.1 Execution architecture and components
+520. Execution pipeline overview (signal, target position, order generation, routing, fills, position update)
+521. Order Management System (OMS): order store, validation, state, and audit
+522. Execution Management System (EMS): algo selection, routing, and trader controls
+523. Separation of concerns (strategy, risk, OMS, EMS, gateway) and the interfaces between them
+524. Parent/child order model (parent order slicing into child orders, aggregation of fills)
+525. Order aggregation, netting, and internal crossing across strategies
+526. Execution service high availability and recovery after restart
+527. Paper trading and simulated exchange
+
+### 13.2 Order state machine and lifecycle correctness
+528. Order state machine (new, pending, acknowledged, partially filled, filled, cancelled, rejected, expired)
+529. Handling unknown or out-of-order states (pending-cancel races, late fills after cancel)
+530. Idempotent order submission and client order ID design
+531. Retry policy, timeouts, and duplicate-order prevention
+532. Order amendment, cancel/replace semantics, and priority loss
+533. Fill processing (partial fills, busted fills, corrections, average-price computation)
+534. Position update on fills vs. on acknowledgments, and pending-exposure accounting
+535. Order-state reconciliation with broker and exchange
+536. Orphaned and ghost orders: detection and cleanup at startup and shutdown
+537. End-of-day and start-of-day order and position carry-over
+
+### 13.3 Pre-trade controls in the execution path
+538. Price collars, fat-finger checks, and sanity bands against the last/mid price
+539. Quantity, notional, and order-rate limits per strategy, account, and instrument
+540. Duplicate and runaway-order detection
+541. Buying-power, margin, and borrow checks before submission
+542. Restricted-list, compliance, and market-hours checks
+543. Self-trade and cross-strategy wash-trade prevention
+544. Kill-switch integration at the OMS, gateway, and broker levels
+545. Throttling and circuit breakers on message rates
+
+### 13.4 Execution algorithms
+546. Schedule-based algos (TWAP, VWAP, and volume-curve estimation)
+547. Participation algos (POV, percentage of volume) and volume forecasting
+548. Implementation shortfall and arrival-price algos (Almgren-Chriss style trade-off of cost and risk)
+549. Close, open, and auction-targeting algos
+550. Passive and liquidity-seeking algos (post, peg, and capture rebates)
+551. Iceberg and reserve-order logic and anti-gaming randomization
+552. Sniper, opportunistic, and dark-liquidity-seeking algos
+553. Pairs and spread execution (legging risk, simultaneous execution, and hedge ratios)
+554. Basket and portfolio execution (program trading, risk-balanced scheduling, and target-weight rebalancing)
+555. Options execution (multi-leg orders, spread books, implied pricing, and delta-hedge timing)
+556. Futures roll execution (calendar spread vs. leg-by-leg)
+557. FX execution (RFQ, streaming prices, last-look, and aggregator liquidity)
+558. Algorithm parameter selection and adaptive tuning (urgency, aggression, limit price, and end time)
+559. Algo selection logic by order size, liquidity, volatility, and alpha-decay horizon
+560. Optimal execution theory (square-root impact, trade scheduling, and risk-aversion)
+561. Anti-gaming and information-leakage control (randomized sizes, timing, and venue rotation)
+
+### 13.5 Order types and instructions in execution
+562. Smart limit-price logic (mid, touch, improving price, and price-chasing control)
+563. Marketable-limit and protection-price orders
+564. Conditional orders (stop-limit, trailing, and market-if-touched) and where they are held (client-side vs. exchange-side)
+565. Client-side simulated order types and their failure modes during disconnects
+566. Aggressive vs. passive decision logic (spread crossing, queue-position estimate, and fill probability)
+567. Order-sizing against displayed depth and expected impact
+568. Order flags (post-only, reduce-only, hidden, minimum quantity, and all-or-none)
+569. Exchange-specific order types and matching-engine rules
+
+### 13.6 Smart order routing and venue selection
+570. Venue characteristics (fees, fill rates, latency, toxicity, and hidden liquidity)
+571. Routing logic (spray, sweep, waterfall, and cost-based routing)
+572. Best execution policy and evidence capture
+573. Fragmentation and consolidated vs. direct feeds (NBBO, protected quotes, and trade-through rules)
+574. Dark pools, midpoint crossing, and block trading
+575. Internalization, payment for order flow, and conflicts of interest
+576. Order-protection and locked/crossed market handling
+577. Dynamic venue scoring using realized fill quality and markouts
+578. Cross-listed and multi-currency routing
+
+### 13.7 Connectivity and protocols
+579. Broker and exchange connectivity (FIX, REST, WebSocket, and native binary protocols)
+580. FIX in depth (message types, tags, session vs. application layer, sequence recovery, and custom tags)
+581. Exchange native protocols (ITCH/OUCH, SBE, and binary gateways)
+582. Broker API behavior (rate limits, order-ID semantics, reject codes, and quirks per broker)
+583. Session management (logon, heartbeat, reconnect, sequence reset, and failover gateways)
+584. Market data and order-entry path separation
+585. Drop copy, trade confirmations, and independent fill feeds
+586. Gateway abstraction layer for multi-broker support
+587. Reject-code handling and error classification (retryable vs. fatal)
+588. Cancel-on-disconnect and session-loss behavior
+589. Testing environments, certification, and exchange conformance testing
+590. Broker outage handling and failover to a secondary broker or venue
+
+### 13.8 Market impact and liquidity-aware execution
+591. Market impact estimation (temporary vs. permanent, square-root model, and calibration from own fills)
+592. Participation-rate limits and liquidity-based position-size caps
+593. Intraday volume and spread patterns, and time-of-day execution scheduling
+594. Liquidity estimation (depth, resilience, and hidden liquidity)
+595. Order-book-based execution signals (imbalance, microprice, and short-term price prediction)
+596. Trading around events (auctions, announcements, expiries, and index rebalances)
+597. Handling illiquid instruments, wide spreads, and thin books
+598. Capacity limits implied by execution costs
+599. Pre-trade cost estimation and go/no-go decisions
+
+### 13.9 Execution for specific products
+600. Equities (lot sizes, auctions, short-sale rules, and fractional shares)
+601. Futures (roll, tick size, calendar spreads, and settlement windows)
+602. Options (strike and expiry selection, spread-order books, early-exercise and assignment handling, and implied-vol quoting)
+603. FX (spot vs. forward, value dates, and swap points)
+604. Fixed income (RFQ, dealer-to-client, and TRACE-style reporting)
+605. Crypto (CEX order books, perpetual-swap mechanics, and DEX routing with gas and slippage)
+606. Cross-asset hedges executed together (delta hedge with underlying, and FX hedge for foreign positions)
+
+### 13.10 Execution under stress and abnormal conditions
+607. Degraded-mode logic (stale data, partial connectivity, and feed disagreement)
+608. Behavior during halts, auctions, limit-up/limit-down, and volatility interruptions
+609. Handling rejected, stuck, or unconfirmed orders and positions of unknown state
+610. Emergency flatten, reduce-only, and liquidation procedures
+611. Partial-fill exposure management for multi-leg and pairs trades
+612. Latency spikes and queue backlogs in the order path
+613. Controlled shutdown, restart, and resume procedures
+614. Manual intervention workflows and four-eyes approval
+
+### 13.11 Latency engineering and high-frequency execution
+615. Latency budget and measurement (tick-to-trade, wire-to-wire, and percentile tracking)
+616. Network design (co-location, cross-connects, microwave links, and kernel bypass)
+617. Hardware acceleration (FPGA, SmartNICs, and GPU where relevant)
+618. Software optimization (lock-free queues, CPU pinning, NUMA, and garbage-collection control)
+619. Time synchronization and hardware timestamping
+620. Latency arbitrage, speed races, and queue-position strategies
+621. Cost-benefit of speed (when low latency is not worth building)
+622. Determinism and jitter control
+
+### 13.12 Execution testing, simulation, and quality assurance
+623. Execution simulator design (fill models, queue models, and latency models)
+624. Replay-based testing with recorded market data and order flow
+625. Paper-trading limitations vs. live fills (no market impact and optimistic fills)
+626. Fault injection (disconnects, duplicate messages, delayed acknowledgments, and rejects)
+627. Algorithm unit tests and regression suites with expected schedules
+628. Shadow-mode execution and canary rollout of new algos
+629. Production monitoring of execution (fill rates, rejects, slippage, and latency)
+630. Post-trade review loop (feeding transaction-cost analytics back into algo parameters)
 
 ## PART 14. Costs, Taxes, and Accounting
 
 ### 14.1 Costs, taxes, and accounting
-527. Funding, financing, and margin costs
-528. Commission structures, brokerage tiers, and exchange fees
-529. Maker-taker rebates and fee-tier optimization
-530. Taxes (transaction taxes such as STT, capital gains, GST, stamp duty)
-531. Borrow fees and short-rebate economics
-532. Total cost of ownership (data, infrastructure, staff, and compliance)
-533. Multi-currency accounting, FX conversion, and base-currency reporting
-534. Cash management, interest accrual, and margin interest
-535. Settlement cycles (T+1/T+2), settlement fails, custody, and clearing
-536. Time-weighted vs. money-weighted returns, log vs. simple returns, annualization conventions
+631. Funding, financing, and margin costs
+632. Commission structures, brokerage tiers, and exchange fees
+633. Maker-taker rebates and fee-tier optimization
+634. Taxes (transaction taxes such as STT, capital gains, GST, stamp duty)
+635. Borrow fees and short-rebate economics
+636. Total cost of ownership (data, infrastructure, staff, and compliance)
+637. Multi-currency accounting, FX conversion, and base-currency reporting
+638. Cash management, interest accrual, and margin interest
+639. Settlement cycles (T+1/T+2), settlement fails, custody, and clearing
+640. Time-weighted vs. money-weighted returns, log vs. simple returns, annualization conventions
 
 ## PART 15. Performance and Analytics
 
 ### 15.1 Return measurement fundamentals
-537. Simple vs. log returns, and when each is valid (aggregation across time vs. across assets)
-538. Compounding, geometric vs. arithmetic mean, and volatility drag
-539. Annualization conventions (252 vs. 365, calendar vs. trading days, irregular sampling)
-540. Time-weighted return (TWR) vs. money-weighted return (MWR/IRR)
-541. Handling cash flows, deposits, and withdrawals in return calculation
-542. Gross vs. net returns (before and after costs, fees, and taxes)
-543. Mark-to-market vs. realized P&L, and unrealized P&L treatment
-544. Intraday vs. end-of-day P&L, and valuation price choice (last, mid, settlement, VWAP)
-545. Handling stale prices and illiquid-asset valuation
-546. Multi-currency returns (local vs. base currency, FX contribution)
-547. Return decomposition (price, carry, dividend, financing, FX)
-548. Leverage-adjusted and notional vs. capital-based return denominators
-549. Return on margin vs. return on capital vs. return on risk
+641. Simple vs. log returns, and when each is valid (aggregation across time vs. across assets)
+642. Compounding, geometric vs. arithmetic mean, and volatility drag
+643. Annualization conventions (252 vs. 365, calendar vs. trading days, irregular sampling)
+644. Time-weighted return (TWR) vs. money-weighted return (MWR/IRR)
+645. Handling cash flows, deposits, and withdrawals in return calculation
+646. Gross vs. net returns (before and after costs, fees, and taxes)
+647. Mark-to-market vs. realized P&L, and unrealized P&L treatment
+648. Intraday vs. end-of-day P&L, and valuation price choice (last, mid, settlement, VWAP)
+649. Handling stale prices and illiquid-asset valuation
+650. Multi-currency returns (local vs. base currency, FX contribution)
+651. Return decomposition (price, carry, dividend, financing, FX)
+652. Leverage-adjusted and notional vs. capital-based return denominators
+653. Return on margin vs. return on capital vs. return on risk
 
 ### 15.2 Risk-adjusted performance metrics
-550. Sharpe ratio and its assumptions (normality, i.i.d., stationarity)
-551. Sortino ratio and the choice of minimum acceptable return
-552. Calmar, Sterling, and Burke ratios
-553. Information ratio and tracking error
-554. Treynor ratio and Jensen's alpha
-555. Omega ratio and Kappa ratios
-556. Ulcer Index, Martin ratio, and pain ratio
-557. Tail ratio, gain-to-pain ratio, and profit factor
-558. Higher-moment-adjusted metrics (skew and kurtosis-aware)
-559. Risk-adjusted metric disagreement: why rankings change across metrics
-560. Metric gaming: how each metric can be inflated (selling tails, smoothing, short track records)
+654. Sharpe ratio and its assumptions (normality, i.i.d., stationarity)
+655. Sortino ratio and the choice of minimum acceptable return
+656. Calmar, Sterling, and Burke ratios
+657. Information ratio and tracking error
+658. Treynor ratio and Jensen's alpha
+659. Omega ratio and Kappa ratios
+660. Ulcer Index, Martin ratio, and pain ratio
+661. Tail ratio, gain-to-pain ratio, and profit factor
+662. Higher-moment-adjusted metrics (skew and kurtosis-aware)
+663. Risk-adjusted metric disagreement: why rankings change across metrics
+664. Metric gaming: how each metric can be inflated (selling tails, smoothing, short track records)
 
 ### 15.3 Drawdown and path analysis
-561. Maximum drawdown, average drawdown, and drawdown duration
-562. Time to recovery and underwater curves
-563. Drawdown distribution via Monte Carlo and bootstrap
-564. Expected maximum drawdown under different return models
-565. Drawdown clustering and conditional drawdown
-566. Equity-curve smoothness and linearity (R-squared of the equity curve)
-567. Rolling windows (rolling Sharpe, volatility, drawdown, beta)
-568. Path dependence and order-of-returns risk
+665. Maximum drawdown, average drawdown, and drawdown duration
+666. Time to recovery and underwater curves
+667. Drawdown distribution via Monte Carlo and bootstrap
+668. Expected maximum drawdown under different return models
+669. Drawdown clustering and conditional drawdown
+670. Equity-curve smoothness and linearity (R-squared of the equity curve)
+671. Rolling windows (rolling Sharpe, volatility, drawdown, beta)
+672. Path dependence and order-of-returns risk
 
 ### 15.4 Trade-level analytics
-569. Win rate, average win/loss, payoff ratio, and expectancy
-570. Trade distribution (histograms, outlier dependence, fat-tail contribution)
-571. Reliance on top-N trades (what the P&L looks like without the best 5 trades)
-572. MAE/MFE analysis and exit-efficiency analysis
-573. Holding-period analysis and time-in-market
-574. Streak analysis (consecutive wins/losses) and serial dependence of trades
-575. Trade clustering by time of day, weekday, month, and event
-576. Entry and exit timing quality (edge ratio, entry efficiency)
-577. Slippage per trade and fill-quality statistics
-578. Long vs. short side contribution and asymmetry
-579. Per-instrument, per-sector, and per-strategy contribution
-580. Turnover and trade frequency vs. net return relationship
+673. Win rate, average win/loss, payoff ratio, and expectancy
+674. Trade distribution (histograms, outlier dependence, fat-tail contribution)
+675. Reliance on top-N trades (what the P&L looks like without the best 5 trades)
+676. MAE/MFE analysis and exit-efficiency analysis
+677. Holding-period analysis and time-in-market
+678. Streak analysis (consecutive wins/losses) and serial dependence of trades
+679. Trade clustering by time of day, weekday, month, and event
+680. Entry and exit timing quality (edge ratio, entry efficiency)
+681. Slippage per trade and fill-quality statistics
+682. Long vs. short side contribution and asymmetry
+683. Per-instrument, per-sector, and per-strategy contribution
+684. Turnover and trade frequency vs. net return relationship
 
 ### 15.5 Performance attribution
-581. Brinson attribution (allocation, selection, interaction)
-582. Factor-based attribution (market, size, value, momentum, quality, low-vol)
-583. Alpha vs. beta decomposition and residual alpha significance
-584. Strategy-level and signal-level attribution
-585. Risk-contribution attribution (marginal and component risk)
-586. Timing vs. selection vs. sizing attribution
-587. Carry, roll, and convexity attribution for futures and options
-588. Greeks-based P&L attribution for options (delta, gamma, vega, theta, and unexplained residual)
-589. Cost attribution (commissions, spread, impact, financing, taxes)
-590. Regime-conditional attribution (performance by volatility, trend, and macro regime)
-591. Attribution across multi-currency books
-592. Reconciling attribution to actual P&L (the unexplained residual and what it signals)
+685. Brinson attribution (allocation, selection, interaction)
+686. Factor-based attribution (market, size, value, momentum, quality, low-vol)
+687. Alpha vs. beta decomposition and residual alpha significance
+688. Strategy-level and signal-level attribution
+689. Risk-contribution attribution (marginal and component risk)
+690. Timing vs. selection vs. sizing attribution
+691. Carry, roll, and convexity attribution for futures and options
+692. Greeks-based P&L attribution for options (delta, gamma, vega, theta, and unexplained residual)
+693. Cost attribution (commissions, spread, impact, financing, taxes)
+694. Regime-conditional attribution (performance by volatility, trend, and macro regime)
+695. Attribution across multi-currency books
+696. Reconciling attribution to actual P&L (the unexplained residual and what it signals)
 
 ### 15.6 Benchmarking and comparison
-593. Benchmark selection (market, peer, risk-matched, custom blended)
-594. Beta-adjusted and style-adjusted benchmarks
-595. Correlation to benchmarks, strategies, and common risk factors
-596. Up-capture and down-capture ratios
-597. Peer-group and universe comparison
-598. Replication and naive-baseline comparison (does the strategy beat buy-and-hold, equal-weight, or a simple trend rule?)
-599. Hurdle rates, risk-free rate selection, and cash comparison
+697. Benchmark selection (market, peer, risk-matched, custom blended)
+698. Beta-adjusted and style-adjusted benchmarks
+699. Correlation to benchmarks, strategies, and common risk factors
+700. Up-capture and down-capture ratios
+701. Peer-group and universe comparison
+702. Replication and naive-baseline comparison (does the strategy beat buy-and-hold, equal-weight, or a simple trend rule?)
+703. Hurdle rates, risk-free rate selection, and cash comparison
 
 ### 15.7 Live monitoring and degradation detection
-600. Live vs. backtest vs. paper tracking-error dashboards
-601. Expected-vs-realized distribution tests (is the live drawdown within the backtest envelope?)
-602. Change-point detection on strategy returns (CUSUM, Bayesian)
-603. Alpha-decay monitoring, half-life estimation, and alpha capture
-604. Execution-quality drift (slippage, fill rate, reject rate over time)
-605. Model and signal drift metrics (feature distribution shift, PSI, KS tests)
-606. Hit-rate and information-coefficient (IC) decay tracking
-607. Automated strategy health scores and traffic-light rules
-608. Strategy retirement and throttling criteria based on analytics
-609. Alert thresholds and false-alarm control
+704. Live vs. backtest vs. paper tracking-error dashboards
+705. Expected-vs-realized distribution tests (is the live drawdown within the backtest envelope?)
+706. Change-point detection on strategy returns (CUSUM, Bayesian)
+707. Alpha-decay monitoring, half-life estimation, and alpha capture
+708. Execution-quality drift (slippage, fill rate, reject rate over time)
+709. Model and signal drift metrics (feature distribution shift, PSI, KS tests)
+710. Hit-rate and information-coefficient (IC) decay tracking
+711. Automated strategy health scores and traffic-light rules
+712. Strategy retirement and throttling criteria based on analytics
+713. Alert thresholds and false-alarm control
 
 ### 15.8 Execution and cost analytics (TCA)
-610. Implementation shortfall decomposition
-611. Arrival-price, VWAP, TWAP, and close benchmarks
-612. Spread capture, adverse selection, and markout analysis
-613. Market-impact estimation from own trades
-614. Fill-rate, passive vs. aggressive mix, and venue analysis
-615. Broker and algo comparison
-616. Latency analytics (signal-to-order, order-to-ack, ack-to-fill)
-617. Opportunity cost and unfilled-order analysis
-618. Pre-trade cost estimates vs. realized cost reconciliation
+714. Implementation shortfall decomposition
+715. Arrival-price, VWAP, TWAP, and close benchmarks
+716. Spread capture, adverse selection, and markout analysis
+717. Market-impact estimation from own trades
+718. Fill-rate, passive vs. aggressive mix, and venue analysis
+719. Broker and algo comparison
+720. Latency analytics (signal-to-order, order-to-ack, ack-to-fill)
+721. Opportunity cost and unfilled-order analysis
+722. Pre-trade cost estimates vs. realized cost reconciliation
 
 ### 15.9 Portfolio-level analytics
-619. Exposure analytics (gross, net, long, short, beta-adjusted, sector, country, currency)
-620. Concentration metrics (top-N weights, Herfindahl index, effective number of bets)
-621. Correlation structure and diversification ratio over time
-622. Risk decomposition (systematic vs. idiosyncratic, factor risk)
-623. Liquidity profile (days to liquidate, ADV participation)
-624. Leverage, margin utilization, and buying-power history
-625. Turnover, holding-period, and capacity analytics
-626. Greeks and scenario exposure dashboards for derivative books
-627. Realized vs. forecast volatility and risk-model calibration checks
-628. VaR and Expected Shortfall exceedance reporting
+723. Exposure analytics (gross, net, long, short, beta-adjusted, sector, country, currency)
+724. Concentration metrics (top-N weights, Herfindahl index, effective number of bets)
+725. Correlation structure and diversification ratio over time
+726. Risk decomposition (systematic vs. idiosyncratic, factor risk)
+727. Liquidity profile (days to liquidate, ADV participation)
+728. Leverage, margin utilization, and buying-power history
+729. Turnover, holding-period, and capacity analytics
+730. Greeks and scenario exposure dashboards for derivative books
+731. Realized vs. forecast volatility and risk-model calibration checks
+732. VaR and Expected Shortfall exceedance reporting
 
 ### 15.10 Signal and model analytics
-629. Information coefficient (IC), rank IC, and IC information ratio
-630. Quantile (decile) return analysis and monotonicity checks
-631. Signal turnover, autocorrelation, and decay curves
-632. Signal correlation matrix and marginal contribution to the blend
-633. Feature importance stability over time
-634. Prediction calibration and reliability diagrams
-635. Hit rate vs. magnitude accuracy (directional vs. sizing quality)
-636. Error analysis (when and where does the model fail)
-637. Ablation studies and incremental-value tests
+733. Information coefficient (IC), rank IC, and IC information ratio
+734. Quantile (decile) return analysis and monotonicity checks
+735. Signal turnover, autocorrelation, and decay curves
+736. Signal correlation matrix and marginal contribution to the blend
+737. Feature importance stability over time
+738. Prediction calibration and reliability diagrams
+739. Hit rate vs. magnitude accuracy (directional vs. sizing quality)
+740. Error analysis (when and where does the model fail)
+741. Ablation studies and incremental-value tests
 
 ### 15.11 Reporting and communication
-638. Tear sheets (standard one-page strategy and portfolio summaries)
-639. Daily, weekly, and monthly reporting cadences and content
-640. Investor, board, and risk-committee reports
-641. Regulatory and audit reporting packs
-642. Honest-disclosure standards (GIPS-style composites, hypothetical vs. live labeling)
-643. Visualization best practices (equity curve on log scale, underwater plots, heatmaps, return histograms)
-644. Interactive drill-down dashboards (portfolio to strategy to trade to fill)
-645. Narrative commentary: explaining why performance happened, not just what
-646. Report reproducibility, versioning, and traceability to source data
-647. Tax-lot and tax-aware performance reporting
+742. Tear sheets (standard one-page strategy and portfolio summaries)
+743. Daily, weekly, and monthly reporting cadences and content
+744. Investor, board, and risk-committee reports
+745. Regulatory and audit reporting packs
+746. Honest-disclosure standards (GIPS-style composites, hypothetical vs. live labeling)
+747. Visualization best practices (equity curve on log scale, underwater plots, heatmaps, return histograms)
+748. Interactive drill-down dashboards (portfolio to strategy to trade to fill)
+749. Narrative commentary: explaining why performance happened, not just what
+750. Report reproducibility, versioning, and traceability to source data
+751. Tax-lot and tax-aware performance reporting
 
 ### 15.12 Analytics infrastructure
-648. Analytics data model (fills, orders, positions, P&L, prices, reference data)
-649. Point-in-time P&L engine and position reconstruction
-650. Reconciliation of analytics with broker and exchange records
-651. Metric definition registry (one agreed definition per metric across the firm)
-652. Batch vs. streaming analytics pipelines
-653. Data lineage and audit trail for every reported number
-654. Performance-calculation unit testing and golden-dataset validation
-655. Analytics library selection and its pitfalls (differing Sharpe or drawdown conventions across libraries)
+752. Analytics data model (fills, orders, positions, P&L, prices, reference data)
+753. Point-in-time P&L engine and position reconstruction
+754. Reconciliation of analytics with broker and exchange records
+755. Metric definition registry (one agreed definition per metric across the firm)
+756. Batch vs. streaming analytics pipelines
+757. Data lineage and audit trail for every reported number
+758. Performance-calculation unit testing and golden-dataset validation
+759. Analytics library selection and its pitfalls (differing Sharpe or drawdown conventions across libraries)
 
 ## PART 16. Architecture, Engineering, and Security
 
 ### 16.1 System architecture and infrastructure
-656. Architecture styles (monolith, microservices, event-driven)
-657. Latency vs. throughput trade-offs
-658. Messaging and streaming (Kafka, Redis Streams, ZeroMQ)
-659. Language choices (Python, C++, Rust, Java)
-660. Deployment (Docker, Kubernetes, cloud, co-location)
-661. API design (REST, gRPC, WebSocket) and rate limiting
-662. Databases (relational, time-series, caches)
-663. Concurrency, async programming, fault tolerance
-664. Configuration and secrets management
+760. Architecture styles (monolith, microservices, event-driven)
+761. Latency vs. throughput trade-offs
+762. Messaging and streaming (Kafka, Redis Streams, ZeroMQ)
+763. Language choices (Python, C++, Rust, Java)
+764. Deployment (Docker, Kubernetes, cloud, co-location)
+765. API design (REST, gRPC, WebSocket) and rate limiting
+766. Databases (relational, time-series, caches)
+767. Concurrency, async programming, fault tolerance
+768. Configuration and secrets management
 
 ### 16.2 Advanced systems engineering
-665. Event sourcing, CQRS, snapshots, and state recovery
-666. Serialization and schema evolution (Protobuf, Avro, SBE)
-667. Order-book data structures and algorithmic complexity
-668. Lock-free structures, memory management, garbage-collection pauses, and profiling
-669. Numerical precision (floating point vs. decimal arithmetic for money)
-670. Time handling (leap seconds, DST, monotonic clocks)
-671. Idempotent messaging, exactly-once vs. at-least-once semantics
-672. Feature flags, versioned APIs, and configuration drift
-673. Multi-tenancy, scalability, and cost control in the cloud
-674. Vendor lock-in and broker abstraction layers
+769. Event sourcing, CQRS, snapshots, and state recovery
+770. Serialization and schema evolution (Protobuf, Avro, SBE)
+771. Order-book data structures and algorithmic complexity
+772. Lock-free structures, memory management, garbage-collection pauses, and profiling
+773. Numerical precision (floating point vs. decimal arithmetic for money)
+774. Time handling (leap seconds, DST, monotonic clocks)
+775. Idempotent messaging, exactly-once vs. at-least-once semantics
+776. Feature flags, versioned APIs, and configuration drift
+777. Multi-tenancy, scalability, and cost control in the cloud
+778. Vendor lock-in and broker abstraction layers
 
 ### 16.3 Software engineering practices
-675. Version control, branching strategy, and code review
-676. Reproducible environments and dependency management
-677. Property-based testing, fuzzing, and backtest regression testing
-678. Exchange simulator conformance testing
-679. Technical-debt management and documentation standards
-680. Domain-driven design for trading systems
+779. Version control, branching strategy, and code review
+780. Reproducible environments and dependency management
+781. Property-based testing, fuzzing, and backtest regression testing
+782. Exchange simulator conformance testing
+783. Technical-debt management and documentation standards
+784. Domain-driven design for trading systems
 
 ### 16.4 Frontend and user experience
-681. Dashboards (charts, order entry, blotters, positions)
-682. Real-time UI (React, WebSockets, charting libraries)
-683. Alerts and notifications
-684. Strategy configuration and monitoring UIs
-685. Visualization and interactive research notebooks
+785. Dashboards (charts, order entry, blotters, positions)
+786. Real-time UI (React, WebSockets, charting libraries)
+787. Alerts and notifications
+788. Strategy configuration and monitoring UIs
+789. Visualization and interactive research notebooks
 
 ### 16.5 Reliability and operations (technical)
-686. Monitoring, logging, observability (Prometheus, Grafana, ELK)
-687. Incident response and alerting
-688. Disaster recovery, failover, high availability
-689. Testing (unit, integration, replay, chaos)
-690. CI/CD and safe release practices
+790. Monitoring, logging, observability (Prometheus, Grafana, ELK)
+791. Incident response and alerting
+792. Disaster recovery, failover, high availability
+793. Testing (unit, integration, replay, chaos)
+794. CI/CD and safe release practices
 
 ### 16.6 Security
-691. Authentication, authorization, API key management
-692. Encryption in transit and at rest
-693. Secure credential storage
-694. Access control, audit logs, fraud prevention
-695. Threat modeling for trading systems
+795. Authentication, authorization, API key management
+796. Encryption in transit and at rest
+797. Secure credential storage
+798. Access control, audit logs, fraud prevention
+799. Threat modeling for trading systems
 
 ## PART 17. Operations, Governance, Legal, and Business
 
 ### 17.1 Operations and desk processes
-696. Runbooks, on-call rotations, and post-mortems
-697. Change management and release approvals
-698. Middle- and back-office workflows (confirmations, reconciliation, breaks)
-699. Corporate-action elections and proxy handling
-700. Business continuity planning and key-person risk
-701. Vendor and service-level agreement management
+800. Runbooks, on-call rotations, and post-mortems
+801. Change management and release approvals
+802. Middle- and back-office workflows (confirmations, reconciliation, breaks)
+803. Corporate-action elections and proxy handling
+804. Business continuity planning and key-person risk
+805. Vendor and service-level agreement management
 
 ### 17.2 Regulation, compliance, and audit
-702. Regulation and compliance (MiFID II, SEC/FINRA, KYC/AML, audit trails)
-703. Ethics and manipulation boundaries (spoofing, layering, wash trading)
-704. Record retention and best-execution evidence
-705. Market-abuse surveillance (self-monitoring for spoofing and layering)
-706. SOC 2, ISO 27001, and audit readiness
-707. GDPR and data privacy
-708. Intellectual property protection for strategies and open-source licensing
-709. Insurance (errors and omissions, cyber, fidelity)
-710. AI governance (explainability requirements, model-risk regulation, and AI regulatory frameworks)
+806. Regulation and compliance (MiFID II, SEC/FINRA, KYC/AML, audit trails)
+807. Ethics and manipulation boundaries (spoofing, layering, wash trading)
+808. Record retention and best-execution evidence
+809. Market-abuse surveillance (self-monitoring for spoofing and layering)
+810. SOC 2, ISO 27001, and audit readiness
+811. GDPR and data privacy
+812. Intellectual property protection for strategies and open-source licensing
+813. Insurance (errors and omissions, cyber, fidelity)
+814. AI governance (explainability requirements, model-risk regulation, and AI regulatory frameworks)
 
 ### 17.3 Governance and model oversight
-711. Model validation and independent review
-712. Investment and risk committee processes
-713. Documentation and decision logs
+815. Model validation and independent review
+816. Investment and risk committee processes
+817. Documentation and decision logs
 
 ### 17.4 Business and legal structure
-714. Legal structure (prop, fund, RIA, CTA, CPO)
-715. Counterparty and prime brokerage selection
-716. Business model, fees, licensing
-717. Capital raising and investor relations
+818. Legal structure (prop, fund, RIA, CTA, CPO)
+819. Counterparty and prime brokerage selection
+820. Business model, fees, licensing
+821. Capital raising and investor relations
 
 ### 17.5 Product and platform features (if multi-user)
-718. User roles, permissions, and tenant isolation
-719. Customer onboarding, suitability checks, and disclosures
-720. Strategy marketplace, copy trading, and social trading
-721. White-label and broker-integration marketplace
-722. Billing, subscriptions, and customer support
-723. Mobile and notification delivery reliability
-724. Terms of service and liability limits
+822. User roles, permissions, and tenant isolation
+823. Customer onboarding, suitability checks, and disclosures
+824. Strategy marketplace, copy trading, and social trading
+825. White-label and broker-integration marketplace
+826. Billing, subscriptions, and customer support
+827. Mobile and notification delivery reliability
+828. Terms of service and liability limits
 
 ## PART 18. Human Factors, Case Studies, Emerging Topics, and Prerequisites
 
 ### 18.1 Behavioral considerations
-725. Trader psychology and discipline (discretionary or hybrid systems)
-726. Behavioral biases and market anomalies
+829. Trader psychology and discipline (discretionary or hybrid systems)
+830. Behavioral biases and market anomalies
 
 ### 18.2 Case studies in failure
-727. Knight Capital (deployment and kill-switch failure)
-728. LTCM (leverage and correlation risk)
-729. 2007 Quant Quake and crowded quant positions
-730. 2010 Flash Crash
-731. Volmageddon (2018 short-volatility collapse)
-732. Archegos (hidden leverage and concentrated swaps)
-733. GameStop and short-squeeze dynamics
-734. Terra/Luna and FTX collapses (crypto custody and design failures)
-735. Common pattern analysis (leverage, crowding, no kill switch, untested assumptions)
+831. Knight Capital (deployment and kill-switch failure)
+832. LTCM (leverage and correlation risk)
+833. 2007 Quant Quake and crowded quant positions
+834. 2010 Flash Crash
+835. Volmageddon (2018 short-volatility collapse)
+836. Archegos (hidden leverage and concentrated swaps)
+837. GameStop and short-squeeze dynamics
+838. Terra/Luna and FTX collapses (crypto custody and design failures)
+839. Common pattern analysis (leverage, crowding, no kill switch, untested assumptions)
 
 ### 18.3 Emerging topics
-736. T+0 settlement and tokenized securities
-737. Quantum computing for optimization
-738. Synthetic data and privacy-preserving research
-739. Federated and decentralized data sharing
-740. Hardware acceleration beyond FPGA (GPU-based simulation and inference)
+840. T+0 settlement and tokenized securities
+841. Quantum computing for optimization
+842. Synthetic data and privacy-preserving research
+843. Federated and decentralized data sharing
+844. Hardware acceleration beyond FPGA (GPU-based simulation and inference)
 
 ### 18.4 Prerequisites and learning path
-741. Python, NumPy, pandas, and SQL fundamentals
-742. Linux, Git, and cloud basics
-743. Probability and linear algebra refresher
-744. Financial accounting basics
-745. Capstone project design (end-to-end paper-trading system)
-746. Reading list (core quant textbooks, papers, and post-mortems)
+845. Python, NumPy, pandas, and SQL fundamentals
+846. Linux, Git, and cloud basics
+847. Probability and linear algebra refresher
+848. Financial accounting basics
+849. Capstone project design (end-to-end paper-trading system)
+850. Reading list (core quant textbooks, papers, and post-mortems)
 
 
 ## Suggested Build Order
