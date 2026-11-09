@@ -146,6 +146,10 @@ class OrderManager:
             elif kind == "cancelled":
                 if order.status is S.PENDING_CANCEL or order.status.is_open:
                     self._transition(order, S.CANCELLED, event.reason)
+            elif kind == "cancel_rejected":
+                # the cancel lost (e.g. already filled): back to the live state it was in
+                if order.status is S.PENDING_CANCEL:
+                    self._transition(order, S.PARTIALLY_FILLED if order.filled_qty > 0 else S.ACKNOWLEDGED, event.reason)
             elif kind == "expired":
                 if order.status.is_open:
                     self._transition(order, S.EXPIRED, event.reason)

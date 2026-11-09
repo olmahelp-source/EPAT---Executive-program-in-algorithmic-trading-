@@ -99,11 +99,13 @@ class RestBrokerBase(BrokerGateway):
     """
 
     def __init__(self, credentials: Optional[Dict[str, str]] = None, paper: bool = True,
-                 max_calls_per_sec: int = 5) -> None:
+                 max_calls_per_sec: int = 5, retry_attempts: int = 3, retry_sleep=None) -> None:
         super().__init__()
         self._credentials = credentials or {}
         self.paper = paper
         self._limiter = RateLimiter(max_calls_per_sec, 1.0)
+        self._retry_attempts = retry_attempts
+        self._retry_sleep = retry_sleep or __import__("time").sleep
 
     @abc.abstractmethod
     def _request(self, method: str, path: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -113,7 +115,7 @@ class RestBrokerBase(BrokerGateway):
         if not self._limiter.allow():
             raise RateLimitError("client-side rate limit")
 
-        @retry(max_attempts=3, base_delay=0.2)
+        @retry(max_attempts=self._retry_attempts, base_delay=0.2, sleep=self._retry_sleep)
         def go() -> Dict[str, Any]:
             return self._request(method, path, payload)
         return go()
