@@ -146,7 +146,12 @@ class LibraryTests(unittest.TestCase):
         md = MarketData()
         for s, df in data.items():
             md.add(s, df)
+        needs_data = {"factor_ls", "sentiment"}                         # need a fundamentals store / news signal attached
         for name in STRATEGIES.names():
+            if name in needs_data:
+                res = BacktestEngine(md, PlatformConfig()).run(STRATEGIES.create(name, ["A", "B", "C"]))
+                self.assertTrue(res.kill_switch_triggered, name)          # fails loudly, contained, and halts trading
+                continue
             if name == "pairs_trading":
                 strat = STRATEGIES.create(name, ["A", "B"])
             else:
