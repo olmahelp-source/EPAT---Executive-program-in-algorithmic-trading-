@@ -2,6 +2,8 @@
 
 Each topic lists what it covers, the key details, the common pitfall, and something concrete to build or test.
 
+Worked examples, formulas, and runnable code for every topic here are in [course/part-02-quantitative-foundations](../course/part-02-quantitative-foundations/README.md).
+
 ## 2.1 Statistics and probability
 
 36. Descriptive statistics of returns (skewness, kurtosis, fat tails)

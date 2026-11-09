@@ -22,3 +22,7 @@ Each topic has four lines: what it covers, key details, the common pitfall, and 
 - [Part 16. Architecture, Engineering, and Security](part-16-architecture-engineering-security.md) (topics 760 to 799, 40 topics)
 - [Part 17. Operations, Governance, Legal, and Business](part-17-operations-governance-business.md) (topics 800 to 828, 29 topics)
 - [Part 18. Human Factors, Case Studies, Emerging Topics, and Prerequisites](part-18-human-cases-emerging-prerequisites.md) (topics 829 to 850, 22 topics)
+
+## Course material
+
+- [Part 2 worked examples, formulas, and code](../course/part-02-quantitative-foundations/README.md) (topics 36 to 78)
