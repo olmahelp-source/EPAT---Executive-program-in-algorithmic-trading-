@@ -12,6 +12,18 @@ python -m algoplatform optimize --strategy sma_crossover --method genetic
 cd tests && python -m unittest discover -p "test_*.py"     # 200+ tests
 ```
 
+## Web UI
+
+```
+PYTHONPATH=src python -m algoplatform.web --port 8080      # then open http://127.0.0.1:8080
+```
+Standard-library server plus a no-build single-page UI (`src/algoplatform/web/`). Tabs: **Backtest** (any built-in strategy, equity/drawdown charts, metrics, trades), **Strategy builder** (indicators and rules as a form, validated server-side), **Optimise** (random/genetic with plateau score), **Paper trading** (simulated broker on a synthetic feed: order ticket, positions, orders, risk meters, kill switch) and **Admin & audit** (audit log, role management).
+
+- The first account created becomes the administrator; later sign-ups are traders. Raise roles in the Admin tab (a Risk Manager or Admin is needed to reset a tripped kill switch).
+- Every call goes through `TradingPlatform`, so permissions are enforced server-side, not just hidden in the UI. Server text is rendered with `textContent` only, and responses carry CSP and no-sniff headers.
+- **Localhost only.** There is no TLS and state is in memory. Do not expose it to a network without a TLS reverse proxy and your own auth in front.
+- API: `POST /api/login|register`, `GET /api/me|strategies|session|audit|users`, `POST /api/backtest|optimize|session/open|step|order|cancel_all|killswitch|close|users/role` (see `web/server.py`).
+
 ## Architecture
 
 ```

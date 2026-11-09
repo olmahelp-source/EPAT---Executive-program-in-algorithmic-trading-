@@ -17,3 +17,6 @@ algoplatform = "algoplatform.app.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"algoplatform.web" = ["static/*"]

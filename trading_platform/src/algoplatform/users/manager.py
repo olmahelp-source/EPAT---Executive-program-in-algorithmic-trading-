@@ -59,6 +59,9 @@ class UserManager:
         self.tokens = tokens or TokenService()
         self._now = now
 
+    def user_count(self) -> int:
+        return len(self._users)
+
     # ---- lifecycle ------------------------------------------------------------------
     def register(self, username: str, password: str, role: Role = Role.TRADER,
                  actor: Optional[User] = None) -> User:
