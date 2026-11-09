@@ -2,6 +2,8 @@
 
 850 topics grouped into 18 parts by type, numbered continuously. Duplicates from earlier drafts were merged.
 
+Micro details for every topic are in [topic-details/](topic-details/README.md).
+
 ## Contents
 
 - PART 1. Market Foundations (35 topics)
