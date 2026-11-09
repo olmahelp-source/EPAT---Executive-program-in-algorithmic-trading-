@@ -38,6 +38,8 @@ class BacktestResult:
     kill_switch_triggered: bool = False
     order_count: int = 0
     rejected_orders: int = 0
+    parents: List[Any] = field(default_factory=list)
+    orders: List[Any] = field(default_factory=list)
 
     @property
     def returns(self) -> pd.Series:
@@ -74,7 +76,8 @@ class BacktestEngine:
         self.flatten_on_kill = flatten_on_kill
 
     def run(self, strategy: Union[Strategy, Sequence[Tuple[Strategy, float]]], start=None, end=None,
-            sizer: Optional[PositionSizeManager] = None, close_at_end: bool = True) -> BacktestResult:
+            sizer: Optional[PositionSizeManager] = None, close_at_end: bool = True,
+            algo: Optional[Tuple[str, dict]] = None, algo_min_notional: float = 0.0) -> BacktestResult:
         """Run one strategy (single-use instance) or ``[(strategy, capital_pct), ...]``."""
         slots = [(strategy, 1.0)] if isinstance(strategy, Strategy) else list(strategy)
         if not slots:
@@ -90,7 +93,8 @@ class BacktestEngine:
         clock = SimClock()
         broker = PaperBroker(cfg.initial_capital, CostModel(cfg.costs), self.max_participation, cfg.risk.allow_short)
         engine = TradingEngine(cfg, broker, dict(self.data.instruments), clock, bus, AuditLog(max_memory=2000),
-                               sizer=sizer, flatten_on_kill=self.flatten_on_kill, rebalance_band=self.rebalance_band)
+                               sizer=sizer, flatten_on_kill=self.flatten_on_kill, rebalance_band=self.rebalance_band,
+                               algo=algo, algo_min_notional=algo_min_notional)
         for strat, pct in slots:
             engine.add_strategy(strat, pct)
         start_ts = pd.Timestamp(start) if start is not None else None
@@ -120,12 +124,14 @@ class BacktestEngine:
             strategy=[s.describe() for s, _ in slots] if len(slots) > 1 else slots[0][0].describe(),
             config=copy.deepcopy(cfg), benchmark=self._benchmark(eq.index),
             kill_switch_triggered=engine.risk.kill_switch.is_triggered, order_count=len(orders),
-            rejected_orders=sum(1 for o in orders if o.status.value == "REJECTED"))
+            rejected_orders=sum(1 for o in orders if o.status.value == "REJECTED"),
+            parents=list(engine.algos.parents.values()), orders=orders)
 
     @staticmethod
     def _close_out(engine: TradingEngine, last_bars) -> None:
         """Liquidate at the final close so open P&L is realised into the trade log. The extra
         fill happens at the last bar's close, charged normal costs."""
+        engine.algos.cancel_all(reason="end of backtest")
         for sym, pos in list(engine.portfolio.open_positions().items()):
             b = last_bars.get(sym)
             if b is None:

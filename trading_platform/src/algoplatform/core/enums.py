@@ -26,6 +26,7 @@ class OrderType(str, Enum):
     LIMIT = "LIMIT"
     STOP = "STOP"
     STOP_LIMIT = "STOP_LIMIT"
+    TRAILING_STOP = "TRAILING_STOP"     # needs tags trail_pct or trail_amount
 
 
 class TimeInForce(str, Enum):

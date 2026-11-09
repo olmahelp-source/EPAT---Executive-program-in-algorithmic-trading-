@@ -20,6 +20,7 @@ from ..core.config import PlatformConfig
 from ..core.enums import OrderType, Side
 from ..core.events import EventBus
 from ..core.exceptions import PlatformError, StrategyError, ValidationError
+from ..execution.manager import AlgoExecutionManager
 from ..core.logging import AuditLog, get_logger
 from ..core.models import Bar, Fill, Instrument, Signal
 from ..orders.execution import ExecutionService
@@ -46,7 +47,8 @@ class TradingEngine:
     def __init__(self, cfg: PlatformConfig, broker: BrokerGateway, instruments: Optional[Dict[str, Instrument]] = None,
                  clock: Optional[Clock] = None, bus: Optional[EventBus] = None, audit: Optional[AuditLog] = None,
                  risk: Optional[RiskManager] = None, sizer: Optional[PositionSizeManager] = None,
-                 flatten_on_kill: bool = True, rebalance_band: float = 0.10, vol_lookback: int = 20) -> None:
+                 flatten_on_kill: bool = True, rebalance_band: float = 0.10, vol_lookback: int = 20,
+                 algo: Optional[tuple] = None, algo_min_notional: float = 0.0) -> None:
         self.cfg = cfg
         self.clock = clock or SystemClock()
         self.bus = bus or EventBus()
@@ -62,6 +64,10 @@ class TradingEngine:
         self.price_times: Dict[str, datetime] = {}
         self.execution = ExecutionService(self.oms, broker, self.risk, self.portfolio, self.clock,
                                           lambda: self.last_prices, lambda: self.price_times)
+        self.algos = AlgoExecutionManager(self.execution, self.oms, self.bus, self.instruments)
+        self.algo = algo                       # e.g. ("twap", {"bars": 5}); None = single market orders
+        self.algo_min_notional = algo_min_notional
+        self._bars: Dict[str, Bar] = {}
         self._slots: Dict[str, _Slot] = {}
         self.flatten_on_kill = flatten_on_kill
         self.rebalance_band = rebalance_band
@@ -92,6 +98,7 @@ class TradingEngine:
 
     def stop(self) -> None:
         try:
+            self.algos.cancel_all(reason="engine stopped")
             self.execution.cancel_all()
         finally:
             for slot in self._slots.values():
@@ -112,6 +119,7 @@ class TradingEngine:
                 log.error("strategy on_fill failed: %r", exc)
 
     def _on_kill(self, reason: str) -> None:
+        self.algos.cancel_all(reason="kill switch")
         self.execution.cancel_all()
         if self.flatten_on_kill:
             self.execution.flatten_all(reason)
@@ -153,6 +161,8 @@ class TradingEngine:
         self.risk.monitor.update_equity(equity)
         self._last_equity = equity
         self.bars_processed += 1
+        self._bars = bars
+        self.algos.on_bars(bars)                              # keeps volume stats; works active parents below
         self.bus.publish(ev.BAR, bars)
         if self.risk.kill_switch.is_triggered:
             self.execution.flatten_all("kill switch active") if self.flatten_on_kill else None
@@ -220,18 +230,33 @@ class TradingEngine:
 
     def _rebalance(self, symbol: str, strategy_id: str) -> None:
         desired = self.net_target(symbol)
-        pending = self.oms.pending_exposure().get(symbol, 0.0)
         current = self.portfolio.quantity(symbol)
-        delta = desired - (current + pending)
         inst = self.instruments.get(symbol) or Instrument(symbol)
-        delta = inst.round_qty(delta)
+        # working children are in the OMS pending exposure; the unsent part of an active parent is added
+        pending = self.oms.pending_exposure().get(symbol, 0.0) + self.algos.signed_unsent(symbol)
+        delta = inst.round_qty(desired - (current + pending))
         if delta == 0:
             return
         # hysteresis: ignore small re-sizing of an existing same-side position to avoid churn
         if desired != 0 and current * desired > 0 and abs(delta) < self.rebalance_band * abs(current):
             return
-        side = Side.from_qty(delta)
-        self.execution.submit(symbol, side, abs(delta), OrderType.MARKET, strategy_id=strategy_id)
+        price = self.last_prices.get(symbol, 0.0)
+        if self.algo is not None and abs(delta) * price >= self.algo_min_notional:
+            if self.algos.active(symbol):                      # target moved: drop the old plan, re-plan from fills
+                self.algos.cancel_all(symbol, "retargeted")
+                pending = self.oms.pending_exposure().get(symbol, 0.0)
+                delta = inst.round_qty(desired - (current + pending))
+                if delta == 0:
+                    return
+            name, params = self.algo
+            parent = self.algos.start(symbol, Side.from_qty(delta), abs(delta), name, price, strategy_id,
+                                      start_ts=self.clock.now(), **params)
+            bar = self._bars.get(symbol)
+            if bar is not None:
+                self.algos.work_now(parent, bar)
+            return
+        self.execution.submit(symbol, Side.from_qty(delta), abs(delta), OrderType.MARKET, strategy_id=strategy_id,
+                              tags={"arrival_price": price})
 
     # ---- reporting -----------------------------------------------------------------------------------
     def summary(self) -> Dict[str, Any]:

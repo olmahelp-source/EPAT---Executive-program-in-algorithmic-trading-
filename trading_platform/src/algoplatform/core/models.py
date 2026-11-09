@@ -129,6 +129,8 @@ class Order:
         if self.order_type in (OrderType.STOP, OrderType.STOP_LIMIT):
             if self.stop_price is None or self.stop_price <= 0:
                 raise ValidationError("stop order needs positive stop_price")
+        if self.order_type is OrderType.TRAILING_STOP and not (self.tags.get("trail_pct") or self.tags.get("trail_amount")):
+            raise ValidationError("trailing stop needs tags trail_pct or trail_amount")
         if self.order_type is OrderType.MARKET and self.limit_price is not None:
             raise ValidationError("market order cannot carry limit_price")
 

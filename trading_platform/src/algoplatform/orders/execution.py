@@ -10,7 +10,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from ..brokers.base import BrokerGateway
 from ..core.enums import OrderStatus, OrderType, Side, TimeInForce
-from ..core.exceptions import (BrokerConnectionError, BrokerError, OrderRejectedError, PlatformError,
+from ..core.exceptions import (ValidationError, BrokerConnectionError, BrokerError, OrderRejectedError, PlatformError,
                                RateLimitError, ValidationError)
 from ..core.logging import get_logger
 from ..core.models import Order
@@ -47,11 +47,11 @@ class ExecutionService:
                limit_price: Optional[float] = None, stop_price: Optional[float] = None,
                tif: TimeInForce = TimeInForce.DAY, strategy_id: str = "", account_id: str = "",
                reduce_only: bool = False, idempotency_key: Optional[str] = None,
-               tags: Optional[Dict[str, Any]] = None) -> Order:
+               tags: Optional[Dict[str, Any]] = None, parent_id: Optional[str] = None) -> Order:
         """Create, risk-check and send an order. Never raises for business rejections: inspect
         ``order.status``. Raises only for programming errors such as invalid parameters."""
         order = self.oms.create(symbol, side, quantity, order_type, limit_price, stop_price, tif, strategy_id,
-                                account_id, reduce_only, idempotency_key, tags=tags)
+                                account_id, reduce_only, idempotency_key, parent_id=parent_id, tags=tags)
         if order.status is not OrderStatus.NEW:          # idempotent replay of an earlier submit
             return order
         decision = self.risk.evaluate(order, self.risk_context(exclude=order.client_order_id))
@@ -76,6 +76,40 @@ class ExecutionService:
             self.oms.mark_rejected(order, f"internal error: {exc!r}")
             self.risk.monitor.record_error(repr(exc))
         return order
+
+    # ---- linked orders ---------------------------------------------------------------------
+    def submit_oco(self, symbol: str, side: Side, quantity: float, limit_price: float, stop_price: float,
+                   strategy_id: str = "", oto_parent: Optional[str] = None, tags: Optional[Dict[str, Any]] = None) -> List[Order]:
+        """One-cancels-other: a limit and a stop on the same side; the first fill cancels the other."""
+        group = f"OCO-{self.oms.create_group_id()}"
+        base = {**(tags or {}), "oco": group, **({"oto": oto_parent} if oto_parent else {})}
+        a = self.submit(symbol, side, quantity, OrderType.LIMIT, limit_price, strategy_id=strategy_id,
+                        tags=dict(base), parent_id=oto_parent)
+        b = self.submit(symbol, side, quantity, OrderType.STOP, stop_price=stop_price, strategy_id=strategy_id,
+                        tags=dict(base), parent_id=oto_parent)
+        if a.status is OrderStatus.REJECTED and b.status is not OrderStatus.REJECTED:
+            self.cancel(b)                                    # never leave a naked half of an OCO pair
+        elif b.status is OrderStatus.REJECTED and a.status is not OrderStatus.REJECTED:
+            self.cancel(a)
+        return [a, b]
+
+    def submit_bracket(self, symbol: str, side: Side, quantity: float, take_profit: float, stop_loss: float,
+                       entry_limit: Optional[float] = None, strategy_id: str = "",
+                       tags: Optional[Dict[str, Any]] = None) -> List[Order]:
+        """Entry + OCO(take-profit, stop-loss) that only goes live once the entry fills (OTO)."""
+        ref = entry_limit or self._prices().get(symbol)
+        if ref is not None:
+            ok = (stop_loss < ref < take_profit) if side is Side.BUY else (take_profit < ref < stop_loss)
+            if not ok:
+                raise ValidationError("bracket levels must straddle the entry price (stop on the losing side)",
+                                      details={"entry": ref, "take_profit": take_profit, "stop_loss": stop_loss})
+        entry = self.submit(symbol, side, quantity, OrderType.LIMIT if entry_limit else OrderType.MARKET,
+                            entry_limit, strategy_id=strategy_id, tags=dict(tags or {}))
+        if entry.status is OrderStatus.REJECTED:
+            return [entry]
+        exits = self.submit_oco(symbol, side.opposite, quantity, take_profit, stop_loss, strategy_id,
+                                oto_parent=entry.client_order_id, tags=tags)
+        return [entry, *exits]
 
     # ---- cancel / emergency ---------------------------------------------------------------
     def cancel(self, order: Order) -> bool:

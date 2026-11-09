@@ -69,6 +69,9 @@ class OrderManager:
         self._notify(order)
         return order
 
+    def create_group_id(self) -> str:
+        return self._ids.next()
+
     def get(self, client_order_id: str) -> Order:
         try:
             return self._orders[client_order_id]
