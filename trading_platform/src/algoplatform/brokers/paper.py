@@ -70,6 +70,19 @@ class PaperBroker(BrokerGateway):
     def fail_next(self, exc: Exception, times: int = 1) -> None:
         self._fail_next.extend([exc] * times)
 
+    def restore(self, fills, open_orders, last_prices=None) -> None:
+        """Rebuild simulator state from a journal after a restart (a real broker keeps its own state; this one
+        lives in process memory). ``fills`` fix positions and cash; ``open_orders`` become live resting orders."""
+        with self._lock:
+            for f in fills:
+                self._positions[f.symbol] = self._positions.get(f.symbol, 0.0) + f.signed_qty
+                self.cash -= f.signed_qty * f.price + f.commission
+                self._seen_client_ids.add(f.client_order_id)
+            for o in open_orders:
+                self._seen_client_ids.add(o.client_order_id)
+                self._open[o.client_order_id] = dataclasses.replace(o, fills=[])
+            self._last.update(last_prices or {})
+
     # ---- order entry --------------------------------------------------------------------
     def submit_order(self, order: Order) -> str:
         with self._lock:

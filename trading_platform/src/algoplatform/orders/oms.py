@@ -60,6 +60,8 @@ class OrderManager:
                           tif, strategy_id, account_id, reduce_only, created_at=now, updated_at=now,
                           parent_id=parent_id, tags=dict(tags or {}))
             order.validate()
+            if idempotency_key:
+                order.tags["idempotency_key"] = idempotency_key        # persisted, so recovery can rebuild the key index
             self._orders[order.client_order_id] = order
             self._open[order.client_order_id] = order
             if idempotency_key:
@@ -68,6 +70,22 @@ class OrderManager:
                           symbol=symbol, side=side.value, qty=quantity)
         self._notify(order)
         return order
+
+    def restore(self, orders) -> None:
+        """Load previously persisted orders (restart recovery). Rebuilds the open-order index, the
+        idempotency-key index and the fill-id set so replayed events stay idempotent."""
+        with self._lock:
+            for o in orders:
+                self._orders[o.client_order_id] = o
+                if o.status.is_open:
+                    self._open[o.client_order_id] = o
+                else:
+                    self._open.pop(o.client_order_id, None)
+                key = o.tags.get("idempotency_key")
+                if key:
+                    self._idem[key] = o.client_order_id
+                for f in o.fills:
+                    self._fill_ids.add(f.fill_id)
 
     def create_group_id(self) -> str:
         return self._ids.next()

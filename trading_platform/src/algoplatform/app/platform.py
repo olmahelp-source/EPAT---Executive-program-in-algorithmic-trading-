@@ -79,12 +79,12 @@ class TradingPlatform:
 
     # ---- trading -----------------------------------------------------------------------------
     def open_session(self, user: User, account_id: str, strategies: Sequence[tuple], instruments=None,
-                     clock=None) -> TradingEngine:
+                     clock=None, store=None) -> TradingEngine:
         """Create a trading engine on one of the user's broker accounts.
         ``strategies`` is ``[(Strategy, capital_pct), ...]``."""
         UserManager.authorize(user, Permission.PLACE_ORDER)
         gateway = self.accounts.open_gateway(user, account_id)
-        engine = TradingEngine(self.config, gateway, instruments, clock, self.bus, self.audit)
+        engine = TradingEngine(self.config, gateway, instruments, clock, self.bus, self.audit, store=store)
         for strat, pct in strategies:
             engine.add_strategy(strat, pct)
         self.engines[account_id] = engine

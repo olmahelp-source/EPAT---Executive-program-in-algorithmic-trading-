@@ -48,7 +48,7 @@ class TradingEngine:
                  clock: Optional[Clock] = None, bus: Optional[EventBus] = None, audit: Optional[AuditLog] = None,
                  risk: Optional[RiskManager] = None, sizer: Optional[PositionSizeManager] = None,
                  flatten_on_kill: bool = True, rebalance_band: float = 0.10, vol_lookback: int = 20,
-                 algo: Optional[tuple] = None, algo_min_notional: float = 0.0) -> None:
+                 algo: Optional[tuple] = None, algo_min_notional: float = 0.0, store=None) -> None:
         self.cfg = cfg
         self.clock = clock or SystemClock()
         self.bus = bus or EventBus()
@@ -76,6 +76,12 @@ class TradingEngine:
         self._last_equity: Optional[float] = None
         self.bars_processed = 0
         self.strategy_errors = 0
+        self.store = store
+        self.journal = None
+        if store is not None:
+            from ..persistence.journal import Journal
+            self.journal = Journal(store, self.bus, on_error=lambda exc: self.risk.kill_switch.trip(
+                f"persistence failure, state can no longer be saved: {exc!r}", source="journal"))
         self.bus.subscribe(ev.FILL, self._on_fill)
         self.risk.kill_switch.on_trip(self._on_kill)
 
@@ -91,6 +97,13 @@ class TradingEngine:
         for s in strategy.symbols:
             self.instruments.setdefault(s, Instrument(s))
             self.portfolio.instruments.setdefault(s, self.instruments[s])
+
+    def recover(self, halt_on_break: bool = True):
+        """Rebuild state from the persistence store (call before ``start``). Returns a RecoveryReport."""
+        if self.store is None:
+            raise ValidationError("engine has no store; pass store=SqliteStore(...)")
+        from ..persistence.recovery import recover
+        return recover(self, self.store, halt_on_break)
 
     def start(self) -> None:
         self.broker.connect()

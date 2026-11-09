@@ -59,6 +59,21 @@ class UserManager:
         self.tokens = tokens or TokenService()
         self._now = now
 
+    def export_users(self) -> List[Dict[str, Any]]:
+        """Serialisable user records (password HASHES only, never passwords) for persistence."""
+        with self._lock:
+            return [{"user_id": u.user_id, "username": u.username, "password_hash": u.password_hash, "role": u.role.value,
+                     "active": u.active, "created_at": u.created_at.isoformat()} for u in self._users.values()]
+
+    def import_users(self, records: List[Dict[str, Any]]) -> int:
+        with self._lock:
+            for r in records:
+                u = User(r["user_id"], r["username"], r["password_hash"], Role(r["role"]), bool(r["active"]),
+                         datetime.fromisoformat(r["created_at"]))
+                self._users[u.user_id] = u
+                self._by_name[u.username] = u.user_id
+            return len(records)
+
     def user_count(self) -> int:
         return len(self._users)
 

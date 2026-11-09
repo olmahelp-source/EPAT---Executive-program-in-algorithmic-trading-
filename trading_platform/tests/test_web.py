@@ -140,3 +140,44 @@ class WebApiTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WebPersistenceTests(unittest.TestCase):
+    def test_users_and_paper_session_survive_a_server_restart(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            app1 = App(PlatformConfig(log_level="CRITICAL"), fast_hash=True, db_dir=d)
+            code, body = app1.dispatch("POST", "/api/register", {"username": "persist_admin", "password": PW}, None)
+            self.assertEqual(code, 200)
+            tok = app1.dispatch("POST", "/api/login", {"username": "persist_admin", "password": PW}, None)[1]["token"]
+            self.assertEqual(app1.dispatch("POST", "/api/session/open", {"symbols": ["AAA", "BBB"], "seed": 5}, tok)[0], 200)
+            app1.dispatch("POST", "/api/session/order", {"symbol": "AAA", "side": "BUY", "quantity": 10}, tok)
+            app1.dispatch("POST", "/api/session/step", {"n": 3}, tok)
+            px = app1.dispatch("GET", "/api/session", {}, tok)[1]["prices"]["BBB"]
+            resting = app1.dispatch("POST", "/api/session/order", {"symbol": "BBB", "side": "BUY", "quantity": 5,
+                                                                   "type": "LIMIT", "limit_price": round(px * 0.95, 2)}, tok)[1]
+            self.assertEqual(resting["order"]["status"], "ACKNOWLEDGED")
+            before = app1.dispatch("GET", "/api/session", {}, tok)[1]
+            self.assertEqual(before["portfolio"]["positions"]["AAA"]["qty"], 10)
+            # --- restart: a brand-new App on the same directory (old tokens are not honoured, users are) ---
+            app2 = App(PlatformConfig(log_level="CRITICAL"), fast_hash=True, db_dir=d)
+            self.assertEqual(app2.dispatch("GET", "/api/me", {}, tok)[0], 401)
+            tok2 = app2.dispatch("POST", "/api/login", {"username": "persist_admin", "password": PW}, None)[1]["token"]
+            code, after = app2.dispatch("GET", "/api/session", {}, tok2)
+            self.assertEqual(code, 200)
+            self.assertTrue(after["open"] and after["resumed"])
+            self.assertTrue(after["recovery"]["clean"], after["recovery"])
+            self.assertEqual(after["portfolio"]["positions"]["AAA"]["qty"], 10)
+            self.assertAlmostEqual(after["portfolio"]["cash"], before["portfolio"]["cash"], places=4)
+            self.assertEqual(after["prices"], before["prices"])
+            self.assertEqual(len(after["orders"]), len(before["orders"]))
+            self.assertIn("ACKNOWLEDGED", [o["status"] for o in after["orders"]])        # the resting limit order is back
+            self.assertEqual(app2.dispatch("POST", "/api/session/step", {"n": 2}, tok2)[0], 200)
+            # a deliberate close deletes the saved session so it cannot resurrect
+            self.assertEqual(app2.dispatch("POST", "/api/session/close", {}, tok2)[1], {"open": False})
+            app3 = App(PlatformConfig(log_level="CRITICAL"), fast_hash=True, db_dir=d)
+            tok3 = app3.dispatch("POST", "/api/login", {"username": "persist_admin", "password": PW}, None)[1]["token"]
+            self.assertFalse(app3.dispatch("GET", "/api/session", {}, tok3)[1]["open"])
+            for a in (app1, app2, app3):
+                if a._meta:
+                    a._meta.close()

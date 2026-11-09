@@ -24,13 +24,14 @@ import pandas as pd
 from ..analytics.metrics import drawdown_series
 from ..app.platform import TradingPlatform
 from ..core.config import PlatformConfig
-from ..core.enums import OrderType, Permission, Role, Side
+from ..core.enums import OrderStatus, OrderType, Permission, Role, Side
 from ..core.exceptions import (AuthenticationError, AuthorizationError, BacktestError, ConfigError, DataError,
                                OptimizationError, OrderError, PlatformError, RiskError, StrategyError, UserError,
                                ValidationError)
 from ..core.logging import get_logger
 from ..core.models import Bar
 from ..data import MarketData, synthetic
+from ..persistence import SqliteStore
 from ..optimize import ParameterSpace
 from ..strategy.base import STRATEGIES
 from ..users.manager import User, UserManager
@@ -72,13 +73,22 @@ def series_points(s: pd.Series, max_points: int = 400) -> List[list]:
 class LiveSession:
     """A paper-trading engine fed by a synthetic random-walk price stream."""
 
-    def __init__(self, engine, symbols: List[str], seed: int) -> None:
-        self.engine, self.symbols = engine, symbols
+    def __init__(self, engine, symbols: List[str], seed: int, strategy: Optional[str] = None,
+                 params: Optional[Dict[str, Any]] = None, store: Optional[SqliteStore] = None) -> None:
+        self.engine, self.symbols, self.seed = engine, symbols, seed
+        self.strategy, self.params, self.store = strategy, params or {}, store
         self.rng = np.random.default_rng(seed)
         self.last = {s: float(self.rng.uniform(50, 300)) for s in symbols}
         self.next_ts = pd.Timestamp("2024-01-01")
         self.lock = threading.RLock()
         self.history: Dict[str, List[float]] = {s: [] for s in symbols}
+
+    def save_meta(self) -> None:
+        """Feed state needed to resume after a restart (orders/fills/positions are in the journal)."""
+        if self.store is not None:
+            self.store.put("session", {"symbols": self.symbols, "seed": self.seed, "strategy": self.strategy,
+                                       "params": self.params, "last": self.last, "history": self.history,
+                                       "next_ts": self.next_ts.isoformat(), "bars": self.engine.bars_processed})
 
     def step(self, n: int) -> None:
         with self.lock:
@@ -93,14 +103,23 @@ class LiveSession:
                     self.history[s] = self.history[s][-200:]
                 self.engine.on_bars(bars)
                 self.next_ts = self.next_ts + pd.offsets.BDay(1)
+            self.save_meta()
 
 
 class App:
-    def __init__(self, config: Optional[PlatformConfig] = None, fast_hash: bool = False) -> None:
+    def __init__(self, config: Optional[PlatformConfig] = None, fast_hash: bool = False,
+                 db_dir: Optional[str] = None) -> None:
         self.platform = TradingPlatform(config or PlatformConfig(log_level="WARNING"))
         if fast_hash:                                    # tests only: cheap scrypt
             from ..users.security import PasswordHasher
             self.platform.users.hasher = PasswordHasher(n=2 ** 4)
+        self.db_dir = db_dir
+        self._meta: Optional[SqliteStore] = None
+        if db_dir:
+            os.makedirs(db_dir, exist_ok=True)
+            self._meta = SqliteStore(os.path.join(db_dir, "app.db"))
+            n = self.platform.users.import_users(self._meta.get("users", []))
+            log.info("restored %d users from %s", n, db_dir)
         self.sessions: Dict[str, LiveSession] = {}
         self.lock = threading.Lock()
         self.routes: Dict[Tuple[str, str], Tuple[Callable, bool]] = {}
@@ -136,6 +155,53 @@ class App:
             log.exception("unhandled error on %s %s", method, path)
             return 500, {"error": "INTERNAL", "message": "internal error"}
 
+    # ---- persistence helpers ---------------------------------------------------------------
+    def _save_users(self) -> None:
+        if self._meta is not None:
+            self._meta.put("users", self.platform.users.export_users())
+
+    def _session_path(self, user: User) -> Optional[str]:
+        if not self.db_dir:
+            return None
+        safe = "".join(c for c in user.username if c.isalnum() or c in "_-@.")
+        return os.path.join(self.db_dir, f"session-{safe}.db")
+
+    def _restore_session(self, user: User) -> Optional[LiveSession]:
+        """Resume a session that was alive when the server stopped: rebuild the simulated broker from the journal,
+        recover the engine, and reconcile. A mismatch halts trading rather than guessing."""
+        path = self._session_path(user)
+        if not path or not os.path.exists(path):
+            return None
+        store = SqliteStore(path)
+        meta = store.get("session")
+        if not meta:
+            store.close()
+            return None
+        P = self.platform
+        strategies = []
+        if meta.get("strategy"):
+            strategies = [(P.create_strategy(user, meta["strategy"], meta["symbols"], **(meta.get("params") or {})), 1.0)]
+        acc = P.accounts.link(user, "paper", {}, "ui-session")
+        engine = P.open_session(user, acc.account_id, strategies, store=store)
+        orders = {o.client_order_id: o for o in store.load_orders()}
+        fills = store.load_fills()
+        for f in fills:
+            if f.client_order_id in orders:
+                orders[f.client_order_id].fills.append(f)
+        live = [o for o in orders.values() if o.status in (OrderStatus.ACKNOWLEDGED, OrderStatus.PARTIALLY_FILLED)]
+        engine.broker.restore(fills, live, meta.get("last"))
+        sess = LiveSession(engine, meta["symbols"], meta["seed"], meta.get("strategy"), meta.get("params"), store)
+        sess.last, sess.history = {k: float(v) for k, v in meta["last"].items()}, meta["history"]
+        sess.next_ts = pd.Timestamp(meta["next_ts"])
+        sess.rng = np.random.default_rng([meta["seed"], int(meta.get("bars", 0))])
+        engine.start()
+        rep = engine.recover()
+        engine.bars_processed = int(meta.get("bars", 0))
+        sess.recovery = {"clean": rep.clean, "halted": rep.halted, "reason": rep.halt_reason,
+                         "orders": rep.orders, "fills": rep.fills}
+        self.sessions[user.user_id] = sess
+        return sess
+
     # ---- helpers --------------------------------------------------------------------------
     @staticmethod
     def _data(body: Dict[str, Any]) -> Tuple[MarketData, List[str]]:
@@ -167,6 +233,7 @@ class App:
             with self.lock:
                 role = Role.ADMIN if P.users.user_count() == 0 else Role.TRADER
                 user = P.users.register(b["username"], b["password"], role)
+                self._save_users()
             return {"username": user.username, "role": user.role}
 
         @r("POST", "/api/login", public=True)
@@ -238,10 +305,14 @@ class App:
                 strategies = []
                 if b.get("strategy"):
                     strategies = [(P.create_strategy(u, b["strategy"], symbols, **(b.get("params") or {})), 1.0)]
+                if self._session_path(u) and os.path.exists(self._session_path(u)):
+                    raise ValidationError("a saved session exists; resume it from the Paper trading tab or close it first")
+                store = SqliteStore(self._session_path(u)) if self._session_path(u) else None
                 acc = P.accounts.link(u, "paper", {}, "ui-session")
-                engine = P.open_session(u, acc.account_id, strategies)
+                engine = P.open_session(u, acc.account_id, strategies, store=store)
                 engine.start()
-                sess = LiveSession(engine, symbols, int(b.get("seed", 1)))
+                sess = LiveSession(engine, symbols, int(b.get("seed", 1)), b.get("strategy") or None,
+                                   b.get("params") or {}, store)
                 sess.step(1)
                 self.sessions[u.user_id] = sess
             return self._snapshot(sess)
@@ -250,6 +321,9 @@ class App:
         def session(u, _b):
             UserManager.authorize(u, Permission.VIEW_PORTFOLIO)
             s = self.sessions.get(u.user_id)
+            if s is None:
+                with self.lock:
+                    s = self.sessions.get(u.user_id) or self._restore_session(u)
             return {"open": False} if s is None else self._snapshot(s)
 
         @r("POST", "/api/session/step")
@@ -295,6 +369,15 @@ class App:
                 s = self.sessions.pop(u.user_id, None)
             if s:
                 s.engine.stop()
+                if s.store is not None:
+                    s.store.close()
+            path = self._session_path(u)
+            if path:                                                  # an ended session must not resurrect on restart
+                for suffix in ("", "-wal", "-shm"):
+                    try:
+                        os.remove(path + suffix)
+                    except OSError:
+                        pass
             return {"open": False}
 
         # ---- admin ---------------------------------------------------------------------------
@@ -312,6 +395,7 @@ class App:
         @r("POST", "/api/users/role")
         def set_role(u, b):
             P.users.set_role(u, b["user_id"], Role(b["role"]))
+            self._save_users()
             return {"ok": True}
 
     # ---- serialisation of live state ---------------------------------------------------------
@@ -326,7 +410,8 @@ class App:
             e = s.engine
             snap = e.portfolio.snapshot()
             ks = e.risk.kill_switch
-            return {"open": True, "symbols": s.symbols, "prices": s.last, "history": s.history,
+            return {"open": True, "resumed": getattr(s, "recovery", None) is not None, "recovery": getattr(s, "recovery", None),
+                    "symbols": s.symbols, "prices": s.last, "history": s.history,
                     "portfolio": snap, "bars": e.bars_processed,
                     "equity_curve": series_points(e.portfolio.equity_curve().tail(300)) if e.bars_processed else [],
                     "orders": [self._order(o) for o in reversed(e.oms.all_orders()[-60:])],

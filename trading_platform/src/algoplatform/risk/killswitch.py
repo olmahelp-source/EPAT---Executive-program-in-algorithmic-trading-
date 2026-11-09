@@ -73,6 +73,18 @@ class KillSwitch:
         self.bus.publish(ev.KILL_SWITCH, {"state": "TRIGGERED", "reason": reason, "source": source})
         return True
 
+    def restore(self, reason: str, source: str = "recovery") -> None:
+        """Re-enter the TRIGGERED state without running emergency callbacks (used after a restart, where the
+        emergency actions already happened or are decided by a human). Still needs an authorised reset."""
+        with self._lock:
+            if self._state is KillSwitchState.TRIGGERED:
+                return
+            self._state = KillSwitchState.TRIGGERED
+            self.reason, self.source, self.tripped_at = reason, source, self._clock()
+            self.history.append({"event": "restore", "reason": reason, "source": source, "ts": self.tripped_at})
+        log.critical("kill switch RESTORED as triggered (%s): %s", source, reason)
+        self.audit.record(source, "killswitch.restored", reason=reason)
+
     def reset(self, actor, reason: str, approver=None) -> None:
         """Re-arm trading. ``actor``/``approver`` are users exposing ``has(Permission)`` and ``username``."""
         if not actor.has(Permission.RESET_KILL_SWITCH):
