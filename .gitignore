@@ -5,3 +5,4 @@ build/
 dist/
 *.egg-info/
 /runs/
+/trading_platform/examples/demo_report.html
