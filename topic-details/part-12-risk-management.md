@@ -2,6 +2,8 @@
 
 Each topic lists what it covers, the key details, the common pitfall, and something concrete to build or test.
 
+Worked examples, formulas, and runnable code for every topic here are in [course/part-12-risk-management](../course/part-12-risk-management/README.md).
+
 ## 12.1 Pre-trade and real-time controls
 
 497. Pre-trade checks (position, exposure, fat-finger limits)

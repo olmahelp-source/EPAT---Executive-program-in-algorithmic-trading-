@@ -2,6 +2,8 @@
 
 Each topic lists what it covers, the key details, the common pitfall, and something concrete to build or test.
 
+Worked examples, formulas, and runnable code for every topic here are in [course/part-11-portfolio-capital-allocation](../course/part-11-portfolio-capital-allocation/README.md).
+
 ## 11.1 Portfolio construction and optimization
 
 462. Mean-variance optimization (Markowitz) and its instability

@@ -26,3 +26,5 @@ Each topic has four lines: what it covers, key details, the common pitfall, and 
 ## Course material
 
 - [Part 2 worked examples, formulas, and code](../course/part-02-quantitative-foundations/README.md) (topics 36 to 78)
+- [Part 11 worked examples, formulas, and code](../course/part-11-portfolio-capital-allocation/README.md) (topics 462 to 496)
+- [Part 12 worked examples, formulas, and code](../course/part-12-risk-management/README.md) (topics 497 to 519)
