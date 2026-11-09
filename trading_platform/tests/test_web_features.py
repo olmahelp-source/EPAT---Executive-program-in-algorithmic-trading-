@@ -6,7 +6,6 @@ import unittest
 import urllib.error
 import urllib.request
 
-import numpy as np
 import pandas as pd
 
 import helpers  # noqa: F401

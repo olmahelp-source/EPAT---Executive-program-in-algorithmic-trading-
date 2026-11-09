@@ -5,7 +5,7 @@ from algoplatform.core import (AuditLog, ConfigError, EventBus, Instrument, Orde
                                Signal, ValidationError, Side, OrderType, Bar)
 from algoplatform.core.exceptions import BrokerConnectionError, OrderRejectedError, PlatformError
 from algoplatform.utils import CircuitBreaker, IdGenerator, RateLimiter, retry, safe_div, to_array, SimClock, TradingCalendar
-from datetime import datetime, time, timezone
+from datetime import datetime, timezone
 
 
 class ConfigTests(unittest.TestCase):

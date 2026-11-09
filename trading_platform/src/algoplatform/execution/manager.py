@@ -6,15 +6,15 @@ from typing import Callable, Dict, List, Optional
 import numpy as np
 
 from ..core import events as ev
-from ..core.enums import OrderStatus, OrderType, Side, TimeInForce
+from ..core.enums import OrderStatus, OrderType, Side
 from ..core.exceptions import ValidationError
 from ..core.logging import get_logger
 from ..core.models import Bar, Fill, Instrument
 from ..orders.execution import ExecutionService
 from ..orders.oms import OrderManager
 from ..utils.helpers import IdGenerator
-from .algos import ExecutionAlgo, SliceContext, floor_lot, make_algo
-from .parent import ACTIVE, CANCELLED, DONE, EXPIRED, FAILED, ParentOrder
+from .algos import ExecutionAlgo, SliceContext, make_algo
+from .parent import CANCELLED, DONE, EXPIRED, FAILED, ParentOrder
 
 log = get_logger(__name__)
 

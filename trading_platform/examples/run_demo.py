@@ -4,7 +4,6 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-import numpy as np
 
 from algoplatform.analytics import html_report, text_report
 from algoplatform.app import TradingPlatform

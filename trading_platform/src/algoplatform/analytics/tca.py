@@ -72,7 +72,6 @@ def tca_summary(parents: Iterable[Any]) -> Dict[str, Any]:
     if not rows:
         return {"parents": 0}
     df = pd.DataFrame(rows)
-    w = df["filled"].replace(0, np.nan)
     return {"parents": len(df), "avg_shortfall_bps": float(df["shortfall_bps"].mean()),
             "weighted_shortfall_bps": float(np.average(df["shortfall_bps"], weights=df["filled"]) if df["filled"].sum() else 0.0),
             "avg_fill_rate": float(df["fill_rate"].mean()), "by_algo": df.groupby("algo")["shortfall_bps"].mean().to_dict()}

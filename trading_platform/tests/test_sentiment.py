@@ -1,12 +1,10 @@
-import math
 import unittest
 from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
 
-import helpers
-from helpers import df_from_closes, free_config
+from helpers import free_config
 from algoplatform.backtest import BacktestEngine
 from algoplatform.core.exceptions import StrategyError, ValidationError
 from algoplatform.data import MarketData

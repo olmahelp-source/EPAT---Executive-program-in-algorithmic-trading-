@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import itertools
 from math import comb
-from typing import Callable, Dict, Iterator, List, Optional, Tuple
+from typing import Callable, Dict, Iterator, List, Tuple
 
 import numpy as np
 import pandas as pd

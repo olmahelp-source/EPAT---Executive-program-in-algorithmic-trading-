@@ -6,15 +6,13 @@ from datetime import datetime
 
 import numpy as np
 
-import helpers
 from helpers import bar, free_config, market_from_closes
 from algoplatform.app.engine import TradingEngine
 from algoplatform.brokers import BrokerEvent, CostModel, PaperBroker
 from algoplatform.core import EventBus, Fill, Order, OrderStatus, OrderType, Side, TimeInForce
 from algoplatform.core import events as ev
 from algoplatform.core.exceptions import ValidationError
-from algoplatform.persistence import (SCHEMA_VERSION, Journal, SqliteStore, StoreError, fill_from_dict, fill_to_dict,
-                                      order_from_dict, order_to_dict)
+from algoplatform.persistence import (SCHEMA_VERSION, Journal, SqliteStore, StoreError, fill_from_dict, fill_to_dict)
 from algoplatform.strategy import SMACrossover
 from algoplatform.utils import SimClock
 

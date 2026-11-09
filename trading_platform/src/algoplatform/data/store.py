@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from typing import Dict, Iterable, Iterator, List, Optional
+from typing import Dict, Iterator, List, Optional
 
 import numpy as np
 import pandas as pd

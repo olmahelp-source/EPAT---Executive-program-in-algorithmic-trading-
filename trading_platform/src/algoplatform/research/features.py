@@ -1,7 +1,7 @@
 """Causal feature engineering: every value at row t uses data up to and including t only."""
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, Sequence
 
 import numpy as np
 import pandas as pd

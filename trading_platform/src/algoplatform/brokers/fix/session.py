@@ -5,7 +5,7 @@ import json
 import os
 import threading
 import time
-from typing import Any, Callable, Dict, List, Optional, Protocol, Tuple
+from typing import Callable, Dict, List, Optional, Protocol, Tuple
 
 from ...core.logging import get_logger
 from .message import (ADMIN_TYPES, FixMessage, FixParser, FixProtocolError, HEARTBEAT, LOGON, LOGOUT, RESEND_REQUEST, REJECT,

@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List
 
 import numpy as np
 import pandas as pd
 
-from ..analytics.metrics import performance_metrics, to_returns
+from ..analytics.metrics import performance_metrics
 from ..backtest.engine import BacktestEngine
 from ..core.exceptions import OptimizationError, PlatformError
 from ..core.logging import get_logger

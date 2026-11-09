@@ -3,13 +3,13 @@ from __future__ import annotations
 
 import math
 import time
-from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
 
-from ..backtest.engine import BacktestEngine, BacktestResult
+from ..backtest.engine import BacktestEngine
 from ..core.exceptions import OptimizationError, PlatformError
 from ..core.logging import get_logger
 from .space import ParameterSpace
@@ -77,33 +77,107 @@ class OptimizationResult:
         return float(df.loc[mask, "score"].iloc[0]) if mask.any() else None
 
 
-class _Runner:
-    """Evaluates points with caching and failure isolation (a crashing trial scores -inf)."""
+def _evaluate_safely(objective: Objective, params: Dict[str, Any]):
+    """-> (score, error). One bad parameter set must never kill the search, in-process or in a worker."""
+    try:
+        score = float(objective(params))
+        if not math.isfinite(score):
+            return -math.inf, "non-finite score"
+        return score, None
+    except PlatformError as exc:
+        return -math.inf, exc.message or exc.code
+    except Exception as exc:  # noqa: BLE001
+        log.warning("trial %s failed: %r", params, exc)
+        return -math.inf, repr(exc)
 
-    def __init__(self, objective: Objective, space: ParameterSpace) -> None:
+
+_WORKER_OBJECTIVE: Optional[Objective] = None
+
+
+def _worker_init(objective: Objective) -> None:          # runs once per worker process: data is shipped once, not per trial
+    global _WORKER_OBJECTIVE
+    _WORKER_OBJECTIVE = objective
+
+
+def _worker_eval(params: Dict[str, Any]):
+    return _evaluate_safely(_WORKER_OBJECTIVE, params)
+
+
+class _Runner:
+    """Evaluates points with caching and failure isolation (a crashing trial scores -inf).
+
+    ``n_jobs > 1`` evaluates each batch of points in a process pool. Rows are always recorded in the order the points were
+    requested, so a parallel run produces exactly the same trial table as a serial one."""
+
+    def __init__(self, objective: Objective, space: ParameterSpace, n_jobs: int = 1, trial_timeout: Optional[float] = None) -> None:
         self.objective, self.space = objective, space
+        self.n_jobs, self.trial_timeout = max(1, int(n_jobs)), trial_timeout
         self.cache: Dict[tuple, float] = {}
         self.rows: List[Dict[str, Any]] = []
+        self._pool = None
+
+    def _key(self, params: Dict[str, Any]) -> tuple:
+        return tuple(params[n] for n in self.space.names)
+
+    def _record(self, params: Dict[str, Any], score: float, err: Optional[str]) -> None:
+        self.cache[self._key(params)] = score
+        self.rows.append({**params, "score": score, "error": err})
 
     def evaluate(self, params: Dict[str, Any]) -> float:
-        key = tuple(params[n] for n in self.space.names)
-        if key in self.cache:
-            return self.cache[key]
-        err = None
-        try:
-            score = float(self.objective(params))
-            if not math.isfinite(score):
-                score, err = -math.inf, "non-finite score"
-        except PlatformError as exc:
-            score, err = -math.inf, exc.message or exc.code
-        except Exception as exc:  # noqa: BLE001 - one bad parameter set must not kill the search
-            log.warning("trial %s failed: %r", params, exc)
-            score, err = -math.inf, repr(exc)
-        self.cache[key] = score
-        self.rows.append({**params, "score": score, "error": err})
-        return score
+        return self.evaluate_many([params])[0]
+
+    def evaluate_many(self, points: List[Dict[str, Any]]) -> List[float]:
+        todo, seen = [], set()
+        for p in points:
+            k = self._key(p)
+            if k not in self.cache and k not in seen:
+                todo.append(p)
+                seen.add(k)
+        if todo:
+            if self.n_jobs > 1 and len(todo) > 1:
+                results = self._parallel(todo)
+            else:
+                results = [_evaluate_safely(self.objective, p) for p in todo]
+            for p, (score, err) in zip(todo, results):
+                self._record(p, score, err)
+        return [self.cache[self._key(p)] for p in points]
+
+    def _parallel(self, todo: List[Dict[str, Any]]):
+        import concurrent.futures as cf
+        import multiprocessing as mp
+        import pickle
+        if self._pool is None:
+            try:
+                pickle.dumps(self.objective)
+            except Exception as exc:  # noqa: BLE001
+                raise OptimizationError("objective is not picklable, so it cannot run in a process pool; use "
+                                        "make_parallel_objective(...) or n_jobs=1", details={"error": repr(exc)}) from None
+            try:                                              # spawn: safe even when the parent has threads (e.g. the web server)
+                self._pool = cf.ProcessPoolExecutor(self.n_jobs, mp_context=mp.get_context("spawn"),
+                                                    initializer=_worker_init, initargs=(self.objective,))
+            except (OSError, ValueError) as exc:
+                log.warning("process pool unavailable (%r); running serially", exc)
+                self.n_jobs = 1
+                return [_evaluate_safely(self.objective, p) for p in todo]
+        futures = [self._pool.submit(_worker_eval, p) for p in todo]
+        out = []
+        for p, f in zip(todo, futures):
+            try:
+                out.append(f.result(timeout=self.trial_timeout))
+            except cf.TimeoutError:
+                f.cancel()
+                out.append((-math.inf, f"timed out after {self.trial_timeout}s"))
+            except Exception as exc:  # noqa: BLE001 - a worker crash (e.g. killed) fails the trial, not the search
+                out.append((-math.inf, f"worker failed: {exc!r}"))
+        return out
+
+    def close(self) -> None:
+        if self._pool is not None:
+            self._pool.shutdown(wait=False, cancel_futures=True)
+            self._pool = None
 
     def result(self, method: str, t0: float) -> OptimizationResult:
+        self.close()
         df = pd.DataFrame(self.rows)
         if df.empty:
             raise OptimizationError("no trials were evaluated")
@@ -119,57 +193,70 @@ def _py(v: Any) -> Any:
     return v.item() if hasattr(v, "item") else v
 
 
-def grid_search(objective: Objective, space: ParameterSpace, points: int = 5, max_trials: int = 2000) -> OptimizationResult:
+def grid_search(objective: Objective, space: ParameterSpace, points: int = 5, max_trials: int = 2000, n_jobs: int = 1,
+                trial_timeout: Optional[float] = None) -> OptimizationResult:
     t0 = time.time()
     if space.grid_size(points) > max_trials * 10:
         raise OptimizationError("grid too large; use random_search or reduce points",
                                 details={"size": space.grid_size(points)})
-    run = _Runner(objective, space)
+    run = _Runner(objective, space, n_jobs, trial_timeout)
+    pts = []
     for i, p in enumerate(space.grid(points)):
         if i >= max_trials:
             log.warning("grid truncated at %d trials", max_trials)
             break
-        run.evaluate(p)
+        pts.append(p)
+    try:
+        run.evaluate_many(pts)
+    except BaseException:
+        run.close()
+        raise
     return run.result("grid", t0)
 
 
-def random_search(objective: Objective, space: ParameterSpace, n_iter: int = 50, seed: Optional[int] = 0) -> OptimizationResult:
+def random_search(objective: Objective, space: ParameterSpace, n_iter: int = 50, seed: Optional[int] = 0, n_jobs: int = 1,
+                  trial_timeout: Optional[float] = None) -> OptimizationResult:
     t0 = time.time()
     rng = np.random.default_rng(seed)
-    run = _Runner(objective, space)
-    for _ in range(n_iter):
-        run.evaluate(space.sample(rng))
+    pts = [space.sample(rng) for _ in range(n_iter)]          # sampling is independent of results: same points serial or parallel
+    run = _Runner(objective, space, n_jobs, trial_timeout)
+    try:
+        run.evaluate_many(pts)
+    except BaseException:
+        run.close()
+        raise
     return run.result("random", t0)
 
 
 def genetic_search(objective: Objective, space: ParameterSpace, population: int = 16, generations: int = 8,
                    elite: int = 2, mutation_rate: float = 0.3, tournament: int = 3,
-                   seed: Optional[int] = 0) -> OptimizationResult:
-    """Simple GA: tournament selection, uniform crossover, Gaussian mutation, elitism."""
+                   seed: Optional[int] = 0, n_jobs: int = 1, trial_timeout: Optional[float] = None) -> OptimizationResult:
+    """Simple GA: tournament selection, uniform crossover, Gaussian mutation, elitism. Each generation is evaluated as
+    one batch, so ``n_jobs`` parallelises across the population."""
     t0 = time.time()
     rng = np.random.default_rng(seed)
-    run = _Runner(objective, space)
-    pop = [space.sample(rng) for _ in range(population)]
-    for _ in range(generations):
-        scores = [run.evaluate(p) for p in pop]
-        order = np.argsort(scores)[::-1]
-        nxt = [pop[i] for i in order[:elite]]
-        while len(nxt) < population:
-            def pick():
-                idx = rng.integers(len(pop), size=tournament)
-                return pop[int(idx[np.argmax([scores[i] for i in idx])])]
-            a, b = pick(), pick()
-            child = {n: (a[n] if rng.random() < 0.5 else b[n]) for n in space.names}
-            for p in space.params:
-                if rng.random() < mutation_rate:
-                    child[p.name] = p.perturb(child[p.name], rng)
-            if space.valid(child):
-                nxt.append(child)
-            else:
-                nxt.append(space.sample(rng))
-        pop = nxt
-    for p in pop:
-        run.evaluate(p)
+    run = _Runner(objective, space, n_jobs, trial_timeout)
+    try:
+        pop = [space.sample(rng) for _ in range(population)]
+        for _ in range(generations):
+            scores = run.evaluate_many(pop)
+            order = np.argsort(scores)[::-1]
+            nxt = [pop[i] for i in order[:elite]]
+            while len(nxt) < population:
+                def pick():
+                    idx = rng.integers(len(pop), size=tournament)
+                    return pop[int(idx[np.argmax([scores[i] for i in idx])])]
+                a, b = pick(), pick()
+                child = {n: (a[n] if rng.random() < 0.5 else b[n]) for n in space.names}
+                for p in space.params:
+                    if rng.random() < mutation_rate:
+                        child[p.name] = p.perturb(child[p.name], rng)
+                nxt.append(child if space.valid(child) else space.sample(rng))
+            pop = nxt
+        run.evaluate_many(pop)
+    except BaseException:
+        run.close()
+        raise
     return run.result("genetic", t0)
 
 

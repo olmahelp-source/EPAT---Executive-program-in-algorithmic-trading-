@@ -10,7 +10,7 @@ import pandas as pd
 from ..core.exceptions import StrategyError, ValidationError
 from ..core.models import Signal
 from ..strategy.base import STRATEGIES, Strategy, StrategyContext
-from . import ratios, scores, valuation
+from . import ratios, scores
 from .statements import FundamentalsStore
 
 DIRECTION = {"earnings_yield": 1, "book_to_price": 1, "fcf_yield": 1, "roe": 1, "gross_margin": 1, "piotroski": 1,

@@ -5,8 +5,7 @@ import unittest
 import helpers  # noqa: F401
 from algoplatform.brokers import (AlpacaGateway, BinanceGateway, FakeTransport, ZerodhaGateway, create_gateway)
 from algoplatform.core import EventBus, OrderStatus, OrderType, Side, TimeInForce
-from algoplatform.core.exceptions import (AuthenticationError, BrokerConnectionError, ConfigError, OrderRejectedError,
-                                          RateLimitError)
+from algoplatform.core.exceptions import (AuthenticationError, BrokerConnectionError, ConfigError, OrderRejectedError)
 from algoplatform.orders import OrderManager
 
 S = OrderStatus

@@ -10,8 +10,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from ..brokers.base import BrokerGateway
 from ..core.enums import OrderStatus, OrderType, Side, TimeInForce
-from ..core.exceptions import (ValidationError, BrokerConnectionError, BrokerError, OrderRejectedError, PlatformError,
-                               RateLimitError, ValidationError)
+from ..core.exceptions import (BrokerConnectionError, BrokerError, OrderRejectedError, RateLimitError, ValidationError)
 from ..core.logging import get_logger
 from ..core.models import Order
 from ..portfolio.portfolio import Portfolio

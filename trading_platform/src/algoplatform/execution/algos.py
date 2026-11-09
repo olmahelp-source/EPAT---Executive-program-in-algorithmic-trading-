@@ -8,12 +8,11 @@ algo never over-schedules while earlier slices are still open.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass
+from typing import Any, List, Optional
 
 import numpy as np
 
-from ..core.enums import Side
 from ..core.exceptions import ValidationError
 from ..core.models import Bar
 from ..core.registry import Registry

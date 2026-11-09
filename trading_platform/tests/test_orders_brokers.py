@@ -1,12 +1,11 @@
 import unittest
 
-import helpers
 from helpers import bar, free_cost_config
 from algoplatform.brokers import BrokerEvent, CostModel, PaperBroker, ResilientGateway, create_gateway
 from algoplatform.core import Fill, OrderStatus, OrderType, Side, TimeInForce, EventBus
 from algoplatform.core import events as ev
 from algoplatform.core.config import CostConfig
-from algoplatform.core.exceptions import (BrokerConnectionError, DuplicateOrderError, InvalidTransitionError,
+from algoplatform.core.exceptions import (BrokerConnectionError, InvalidTransitionError,
                                           OrderNotFoundError, OrderRejectedError)
 from algoplatform.orders import OrderManager
 from algoplatform.utils import SimClock

@@ -6,7 +6,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 import numpy as np
 import pandas as pd
 
-from algoplatform.core.config import CostConfig, PlatformConfig, RiskConfig, SizingConfig
+from algoplatform.core.config import CostConfig, PlatformConfig
 from algoplatform.core.enums import Role
 from algoplatform.core.models import Bar
 from algoplatform.data import MarketData

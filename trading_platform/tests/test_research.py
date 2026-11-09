@@ -4,7 +4,6 @@ import unittest
 import numpy as np
 import pandas as pd
 
-import helpers
 from helpers import free_config, market_from_closes
 from algoplatform.analytics.signals import (forward_returns, ic_decay, ic_summary, information_coefficient,
                                             quantile_returns, signal_autocorrelation, signal_correlation, signal_turnover)

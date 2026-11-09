@@ -19,7 +19,7 @@ from ..core import events as ev
 from ..core.config import PlatformConfig
 from ..core.enums import OrderType, Side
 from ..core.events import EventBus
-from ..core.exceptions import PlatformError, StrategyError, ValidationError
+from ..core.exceptions import StrategyError, ValidationError
 from ..execution.manager import AlgoExecutionManager
 from ..core.logging import AuditLog, get_logger
 from ..core.models import Bar, Fill, Instrument, Signal

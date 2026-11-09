@@ -8,10 +8,10 @@ import helpers
 from helpers import bar, free_config, market_from_closes
 from algoplatform.app import TradingPlatform
 from algoplatform.app.cli import main as cli_main
-from algoplatform.core import OrderStatus, OrderType, PlatformConfig, Role, Side
-from algoplatform.core.exceptions import AuthorizationError, ConfigError, KillSwitchActive
+from algoplatform.core import OrderStatus, OrderType, Role, Side
+from algoplatform.core.exceptions import AuthorizationError, ConfigError
 from algoplatform.optimize import Param, ParameterSpace
-from algoplatform.strategy import SMACrossover, StrategyBuilder
+from algoplatform.strategy import StrategyBuilder
 from algoplatform.users import PasswordHasher
 
 

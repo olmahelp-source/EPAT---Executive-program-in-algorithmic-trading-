@@ -4,12 +4,11 @@ from datetime import date
 
 import numpy as np
 
-import helpers
 from algoplatform.core import Side
 from algoplatform.core.exceptions import StatisticsError, ValidationError
 from algoplatform.derivatives import (OptionLeg, binomial_price, butterfly, check_no_arbitrage, covered_call, expiry_fill, fit_svi,
                                       greeks, hedge_trade, implied_vol_slice, iron_condor, mc_price, option_instrument, option_symbol,
-                                      payoff, profile, simulate_delta_hedge, straddle, strangle, svi_total_variance, value,
+                                      payoff, profile, simulate_delta_hedge, straddle, svi_total_variance, value,
                                       vertical_spread, whalley_wilmott_band)
 from algoplatform.portfolio import Portfolio
 from algoplatform.quant import bs_price

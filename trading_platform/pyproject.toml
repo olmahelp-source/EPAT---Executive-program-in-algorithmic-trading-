@@ -20,3 +20,23 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "algoplatform.web" = ["static/*"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 140
+extend-exclude = ["src/tradelib", "src/tradeplatform"]       # earlier untested draft, superseded by algoplatform
+
+[tool.ruff.lint]
+# Blocking set: syntax errors, undefined names, unused imports/variables, redefinitions, mutable defaults.
+select = ["E9", "F63", "F7", "F82", "F401", "F811", "F841", "B006"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/__init__.py" = ["F401"]                                    # re-exports are the point of an __init__
+"tests/*" = ["F841"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+check_untyped_defs = false
+warn_unused_ignores = false
+exclude = ["src/tradelib", "src/tradeplatform", "tests"]

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import re
-from typing import Dict, Tuple
+from typing import Dict
 
 POSITIVE = set("""beat beats exceeded exceeds surpass surpassed strong stronger strength growth grew grow gains gain gained rally
 rallied surge surged soar soared record profit profitable improved improve improvement upgrade upgraded outperform outperformed

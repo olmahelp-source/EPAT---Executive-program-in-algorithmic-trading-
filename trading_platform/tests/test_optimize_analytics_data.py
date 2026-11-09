@@ -7,7 +7,6 @@ from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
 
-import helpers
 from helpers import df_from_closes, free_config, market_from_closes
 from algoplatform.analytics import (build_report, drawdown_periods, drawdown_series, html_report, infer_periods_per_year,
                                     max_drawdown, monthly_returns, performance_metrics, rolling_sharpe, text_report,

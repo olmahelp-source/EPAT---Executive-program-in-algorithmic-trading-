@@ -21,7 +21,7 @@ import numpy as np
 
 from ..core.config import CostConfig
 from ..core.enums import OrderType, Side, TimeInForce
-from ..core.exceptions import BrokerConnectionError, OrderRejectedError
+from ..core.exceptions import OrderRejectedError
 from ..core.models import Bar, Fill, Order
 from ..utils.helpers import IdGenerator
 from .base import BROKERS, BrokerEvent, BrokerGateway

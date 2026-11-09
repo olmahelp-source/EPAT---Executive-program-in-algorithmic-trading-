@@ -8,7 +8,7 @@ from ..core.exceptions import BrokerConnectionError, BrokerError, OrderRejectedE
 from ..core.logging import get_logger
 from ..core.models import Order
 from ..utils.decorators import CircuitBreaker, RateLimiter, retry
-from .base import BrokerEvent, BrokerGateway
+from .base import BrokerGateway
 
 log = get_logger(__name__)
 

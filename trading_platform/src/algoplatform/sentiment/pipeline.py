@@ -8,7 +8,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Dict, List, Mapping, Optional, Sequence, Set
 
-import pandas as pd
 
 from ..core.exceptions import StrategyError, ValidationError
 from ..core.models import Signal

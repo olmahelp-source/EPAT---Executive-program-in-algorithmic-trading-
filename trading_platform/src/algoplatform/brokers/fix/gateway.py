@@ -17,7 +17,7 @@ from ...core.logging import get_logger
 from ...core.models import Fill, Order
 from ..base import BROKERS, BrokerEvent, BrokerGateway
 from .message import (CANCEL_REJECT, CANCEL_REQUEST, EXEC_REPORT, FixMessage, FixProtocolError, NEW_ORDER_SINGLE,
-                      T_AVGPX, T_CLORDID, T_EXECID, T_EXECTYPE, T_LASTPX, T_LASTQTY, T_ORDERID, T_ORDTYPE, T_ORIGCLORDID, T_PRICE,
+                      T_CLORDID, T_EXECID, T_EXECTYPE, T_LASTPX, T_LASTQTY, T_ORDERID, T_ORDTYPE, T_ORIGCLORDID, T_PRICE,
                       T_QTY, T_SIDE, T_STOPPX, T_SYMBOL, T_TEXT, T_TIF, T_TRANSACT, utc_timestamp)
 from .session import FixSession, MemorySeqStore
 

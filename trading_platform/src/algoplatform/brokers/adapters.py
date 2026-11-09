@@ -12,10 +12,10 @@ from __future__ import annotations
 import hashlib
 import hmac
 import time
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 from urllib.parse import urlencode
 
-from ..core.enums import OrderType, Side, TimeInForce
+from ..core.enums import OrderType, TimeInForce
 from ..core.exceptions import (AuthenticationError, BrokerConnectionError, BrokerError, ConfigError,
                                OrderRejectedError, RateLimitError)
 from ..core.logging import get_logger

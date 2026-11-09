@@ -2,13 +2,12 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence
 
 import numpy as np
 
 from ..core.exceptions import StatisticsError, ValidationError
-from ..quant.models import bs_price, implied_vol
+from ..quant.models import implied_vol
 
 
 def binomial_price(S: float, K: float, T: float, r: float, sigma: float, kind: str = "call", american: bool = False,

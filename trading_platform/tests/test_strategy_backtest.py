@@ -4,14 +4,13 @@ import unittest
 import numpy as np
 import pandas as pd
 
-import helpers
-from helpers import df_from_closes, free_config, free_cost_config, market_from_closes
+from helpers import free_config, free_cost_config, market_from_closes
 from algoplatform.backtest import BacktestEngine
 from algoplatform.core import PlatformConfig, Signal
 from algoplatform.core.config import RiskConfig
 from algoplatform.core.exceptions import BacktestError, ConfigError, StrategyError
 from algoplatform.data import MarketData, synthetic
-from algoplatform.strategy import (STRATEGIES, MomentumRotation, PairsTrading, RuleBasedStrategy, SMACrossover,
+from algoplatform.strategy import (STRATEGIES, MomentumRotation, PairsTrading, SMACrossover,
                                    Strategy, StrategyBuilder, create_from_spec, spec_from_json, spec_to_json,
                                    validate_spec)
 

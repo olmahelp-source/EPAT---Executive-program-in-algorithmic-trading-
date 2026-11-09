@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import re
-from typing import Dict, Iterable, List, Mapping, Set, Tuple
+from typing import Iterable, List, Mapping, Set, Tuple
 
 # (event name, regex, direction weight in [-1, 1])
 EVENT_RULES: List[Tuple[str, "re.Pattern[str]", float]] = [(n, re.compile(p, re.I), w) for n, p, w in [

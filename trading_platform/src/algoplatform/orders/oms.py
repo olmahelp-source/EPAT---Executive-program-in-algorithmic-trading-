@@ -3,13 +3,13 @@ from __future__ import annotations
 
 import threading
 from collections import defaultdict
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 from ..brokers.base import BrokerEvent
 from ..core import events as ev
 from ..core.enums import OrderStatus as S, OrderType, Side, TimeInForce
 from ..core.events import EventBus
-from ..core.exceptions import (DuplicateOrderError, InvalidTransitionError, OrderNotFoundError)
+from ..core.exceptions import (InvalidTransitionError, OrderNotFoundError)
 from ..core.logging import AuditLog, get_logger
 from ..core.models import Fill, Order
 from ..utils.helpers import IdGenerator

@@ -8,7 +8,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
-from ..core.enums import Side
 from ..core.exceptions import ValidationError
 from ..core.models import Fill, Instrument, Position
 

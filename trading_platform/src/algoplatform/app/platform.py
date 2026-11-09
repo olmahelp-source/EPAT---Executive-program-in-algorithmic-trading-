@@ -5,14 +5,14 @@ API layer can call it directly without re-implementing access control.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, Optional, Sequence
 
 from ..backtest.engine import BacktestEngine, BacktestResult
 from ..brokers.base import BrokerGateway, create_gateway
 from ..core.config import PlatformConfig
 from ..core.enums import OrderType, Permission, Side
 from ..core.events import EventBus
-from ..core.exceptions import ConfigError, ValidationError
+from ..core.exceptions import ConfigError
 from ..core.logging import AuditLog, get_logger, setup_logging
 from ..core.models import Order
 from ..data.store import MarketData
@@ -20,7 +20,7 @@ from ..optimize.optimizers import OptimizationResult, backtest_objective, optimi
 from ..optimize.space import ParameterSpace
 from ..portfolio.allocation import FundAllocator
 from ..strategy.base import STRATEGIES, Strategy
-from ..strategy.builder import RuleBasedStrategy, create_from_spec, spec_factory, validate_spec
+from ..strategy.builder import create_from_spec, spec_factory
 from ..users.manager import BrokerAccountManager, User, UserManager
 from .engine import TradingEngine
 
